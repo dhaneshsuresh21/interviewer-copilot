@@ -4,6 +4,9 @@ import { Server } from 'socket.io';
 import cors from 'cors';
 import { config, validateConfig } from './config';
 import deepgramRouter from './routes/deepgram';
+import sessionsRouter from './routes/sessions';
+import templatesRouter from './routes/templates';
+import authRouter from './routes/auth';
 import { initializeSocketIO } from './socket/interviewerSocketHandler';
 
 async function startServer() {
@@ -25,6 +28,9 @@ async function startServer() {
     });
 
     app.use('/api', deepgramRouter);
+    app.use('/api', sessionsRouter);
+    app.use('/api', templatesRouter);
+    app.use('/api', authRouter);
 
     const io = new Server(httpServer, {
       cors: {
@@ -43,6 +49,27 @@ async function startServer() {
       console.log(`✅ Frontend URL: ${config.frontendUrl}`);
       console.log(`✅ Environment: ${config.nodeEnv}`);
     });
+
+    // Graceful shutdown handler
+    const shutdown = async () => {
+      console.log('\n🛑 Shutting down gracefully...');
+      try {
+        const { prismaStorageService } = await import('./services/prismaStorageService');
+        await prismaStorageService.disconnect();
+        const { langchainService } = await import('./services/langchainService');
+        langchainService.destroy();
+        httpServer.close(() => {
+          console.log('✅ Server closed');
+          process.exit(0);
+        });
+      } catch (error) {
+        console.error('❌ Error during shutdown:', error);
+        process.exit(1);
+      }
+    };
+
+    process.on('SIGTERM', shutdown);
+    process.on('SIGINT', shutdown);
   } catch (error) {
     console.error('❌ Failed to start server:', error);
     process.exit(1);

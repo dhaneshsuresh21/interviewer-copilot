@@ -38,3 +38,9 @@ Thumbs.db
 
 # Misc
 *.pem
+
+# Database
+*.db
+*.db-journal
+backend/prisma/migrations/
+backend/data/

@@ -9,6 +9,23 @@ interface ActiveGeneration {
 
 export function initializeSocketIO(io: Server) {
   const activeGenerations = new Map<string, Map<string, ActiveGeneration>>();
+  
+  // Cleanup stale entries every hour
+  const cleanupInterval = setInterval(() => {
+    const now = Date.now();
+    for (const [socketId, gens] of activeGenerations.entries()) {
+      for (const [genId, gen] of gens.entries()) {
+        // Remove inactive generations older than 1 hour
+        if (!gen.active && (now - parseInt(genId.split('-')[1] || '0')) > 3600000) {
+          gens.delete(genId);
+        }
+      }
+      // Remove empty socket entries
+      if (gens.size === 0) {
+        activeGenerations.delete(socketId);
+      }
+    }
+  }, 3600000); // Run every hour
 
   io.on('connection', (socket: Socket) => {
     console.log(`Socket connected: ${socket.id}`);
@@ -221,7 +238,15 @@ export function initializeSocketIO(io: Server) {
         }
       }
       activeGenerations.delete(socket.id);
+      
+      // Remove all socket listeners to prevent memory leaks
+      socket.removeAllListeners();
     });
+  });
+
+  // Cleanup on server shutdown
+  process.on('SIGTERM', () => {
+    clearInterval(cleanupInterval);
   });
 
   return io;

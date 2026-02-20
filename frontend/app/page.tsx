@@ -1,7 +1,12 @@
 'use client';
 
 import { InterviewerDashboard } from '@/components/InterviewerDashboard';
+import { ProtectedRoute } from '@/components/ProtectedRoute';
 
 export default function Home() {
-  return <InterviewerDashboard />;
+  return (
+    <ProtectedRoute>
+      <InterviewerDashboard />
+    </ProtectedRoute>
+  );
 }

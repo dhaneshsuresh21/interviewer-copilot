@@ -7,6 +7,7 @@ import { useSocketAnalysis } from '@/lib/hooks/useSocketAnalysis';
 import { AnalysisPanel } from './AnalysisPanel';
 import { QuestionPanel } from './QuestionPanel';
 import { RatingPanel } from './RatingPanel';
+import NotesPanel from './NotesPanel';
 import { Mic, MicOff, Square, Zap, Radio, Wifi, WifiOff, User, Briefcase, X, MessageSquare, AudioLines } from 'lucide-react';
 
 export function InterviewScreen() {
@@ -18,6 +19,7 @@ export function InterviewScreen() {
     isAnalyzing,
     isGeneratingQuestions,
     isGeneratingRating,
+    setInterviewEndTime, // FIX: Add end time setter
   } = useInterviewStore();
 
   const { isConnected: socketConnected } = useSocketAnalysis();
@@ -92,8 +94,11 @@ export function InterviewScreen() {
 
   const confirmEndInterview = () => {
     setIsMicActive(false);
-    endInterview();
     setShowEndConfirm(false);
+    // FIX: Set interview end time
+    setInterviewEndTime(Date.now());
+    // Navigate to evaluation page
+    window.location.href = '/evaluate';
   };
 
   const isAnalyzingAny = isAnalyzing || isGeneratingQuestions || isGeneratingRating;
@@ -305,7 +310,7 @@ export function InterviewScreen() {
           <div className="bg-gray-800 rounded-xl p-6 max-w-sm w-full mx-4 border border-gray-700 shadow-2xl">
             <h3 className="text-lg font-semibold text-white mb-2">End Interview?</h3>
             <p className="text-sm text-gray-400 mb-5">
-              This will stop recording and return to the setup screen. Make sure you've saved any ratings.
+              This will stop recording and take you to the evaluation screen to rate the candidate.
             </p>
             <div className="flex gap-3 justify-end">
               <button
@@ -316,14 +321,17 @@ export function InterviewScreen() {
               </button>
               <button
                 onClick={confirmEndInterview}
-                className="px-4 py-2 bg-red-600 text-white rounded-lg text-sm font-medium hover:bg-red-500 transition-colors"
+                className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-500 transition-colors"
               >
-                End Interview
+                Continue to Evaluation
               </button>
             </div>
           </div>
         </div>
       )}
+
+      {/* Notes Panel */}
+      <NotesPanel />
     </div>
   );
 }

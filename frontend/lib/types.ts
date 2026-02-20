@@ -60,3 +60,49 @@ export interface RatingData {
   notes?: string;
   timestamp: number;
 }
+
+export interface CompetencyRating {
+  competency: string;
+  score: number;
+  evidence: string[];
+  concerns: string[];
+  weight: number;
+  source?: 'interviewer' | 'ai';
+}
+
+export interface InterviewSession {
+  id: string;
+  candidateName: string;
+  role: string;
+  company: string;
+  experienceLevel: string;
+  interviewerName?: string;
+  startTime: number;
+  endTime?: number;
+  duration?: number;
+  turns: Turn[];
+  
+  // Interviewer Evaluation
+  interviewerRatings?: CompetencyRating[];
+  interviewerOverallScore?: number;
+  interviewerStrengths?: string[];
+  interviewerConcerns?: string[];
+  interviewerRecommendation?: 'strong_hire' | 'hire' | 'maybe' | 'no_hire';
+  
+  // AI Evaluation
+  aiRatings?: CompetencyRating[];
+  aiOverallScore?: number;
+  aiStrengths?: string[];
+  aiConcerns?: string[];
+  aiRecommendation?: 'strong_hire' | 'hire' | 'maybe' | 'no_hire';
+  aiAnalysisText?: string;
+  
+  // Legacy fields (for backward compatibility)
+  competencyRatings?: CompetencyRating[];
+  overallScore?: number;
+  strengths?: string[];
+  concerns?: string[];
+  recommendation?: 'strong_hire' | 'hire' | 'maybe' | 'no_hire';
+  
+  notes?: string;
+}

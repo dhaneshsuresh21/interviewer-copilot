@@ -1,11 +1,16 @@
 'use client';
 
 import { useState } from 'react';
+import { useRouter } from 'next/navigation';
 import { useInterviewStore } from '@/lib/store';
-import { Briefcase, User, Building2, Award, AlertCircle, Play, Sparkles } from 'lucide-react';
+import { Briefcase, User, Building2, Award, AlertCircle, Play, Sparkles, BarChart3, FileText, LogOut } from 'lucide-react';
+import Link from 'next/link';
+import TemplateManager from './TemplateManager';
+import { getInterviewerName, clearSession } from '@/lib/auth';
 
 export function SetupScreen() {
   const { setInterviewContext, setInterviewActive, setInterviewState } = useInterviewStore();
+  const router = useRouter();
   
   const [candidateName, setCandidateName] = useState('');
   const [role, setRole] = useState('');
@@ -14,6 +19,14 @@ export function SetupScreen() {
   const [experienceLevel, setExperienceLevel] = useState<'junior' | 'mid' | 'senior' | 'lead'>('mid');
   const [jobDescription, setJobDescription] = useState('');
   const [errors, setErrors] = useState<Record<string, string>>({});
+  const [showTemplates, setShowTemplates] = useState(false);
+
+  const interviewerName = getInterviewerName();
+
+  const handleLogout = () => {
+    clearSession();
+    router.push('/login');
+  };
 
   const validate = () => {
     const newErrors: Record<string, string> = {};
@@ -71,6 +84,14 @@ export function SetupScreen() {
     setInterviewActive(true);
   };
 
+  const handleSelectTemplate = (template: any) => {
+    setRole(template.role);
+    setCompany(template.company || '');
+    setExperienceLevel(template.experienceLevel);
+    setSkills(template.requiredSkills.join(', '));
+    setJobDescription(template.jobDescription || '');
+  };
+
   const inputClasses = (hasError: boolean) => `
     w-full px-4 py-3 
     bg-gray-800 border rounded-lg 
@@ -83,6 +104,37 @@ export function SetupScreen() {
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-900 via-gray-900 to-gray-800 flex items-center justify-center p-6">
       <div className="w-full max-w-2xl">
+        {/* Top Bar with User Info and Actions */}
+        <div className="flex justify-between items-center mb-4">
+          <div className="flex items-center gap-2 text-gray-300">
+            <User className="w-5 h-5 text-blue-400" />
+            <span className="text-sm font-medium">{interviewerName}</span>
+          </div>
+          <div className="flex gap-2">
+            <button
+              onClick={() => setShowTemplates(true)}
+              className="flex items-center gap-2 px-4 py-2 bg-gray-800/50 border border-gray-700 text-gray-300 rounded-lg hover:bg-gray-700/50 transition-colors"
+            >
+              <FileText size={18} />
+              <span className="text-sm font-medium">Templates</span>
+            </button>
+            <Link 
+              href="/dashboard"
+              className="flex items-center gap-2 px-4 py-2 bg-gray-800/50 border border-gray-700 text-gray-300 rounded-lg hover:bg-gray-700/50 transition-colors"
+            >
+              <BarChart3 size={18} />
+              <span className="text-sm font-medium">Dashboard</span>
+            </Link>
+            <button
+              onClick={handleLogout}
+              className="flex items-center gap-2 px-4 py-2 bg-gray-800/50 border border-gray-700 text-gray-300 rounded-lg hover:bg-red-900/30 hover:border-red-700 hover:text-red-400 transition-colors"
+            >
+              <LogOut size={18} />
+              <span className="text-sm font-medium">Logout</span>
+            </button>
+          </div>
+        </div>
+        
         {/* Header */}
         <div className="text-center mb-8">
           <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-gradient-to-br from-blue-500 to-purple-600 mb-4">
@@ -248,6 +300,14 @@ export function SetupScreen() {
           </div>
         </div>
       </div>
+
+      {/* Template Manager Modal */}
+      {showTemplates && (
+        <TemplateManager
+          onSelectTemplate={handleSelectTemplate}
+          onClose={() => setShowTemplates(false)}
+        />
+      )}
     </div>
   );
 }

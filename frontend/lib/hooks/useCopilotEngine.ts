@@ -17,6 +17,7 @@ export function useCopilotEngine() {
     setCurrentAnswer,
     setCurrentQuestion,
     setInterimText,
+    setInterviewStartTime, // FIX: Add start time setter
     language,
     coveredTopics,
     setInterviewActive,
@@ -309,12 +310,15 @@ export function useCopilotEngine() {
       hasStartedRef.current = true;
       console.log('[Engine] Starting interview');
 
+      // FIX: Set interview start time
+      setInterviewStartTime(Date.now());
+
       fsmRef.current.dispatch('START');
       setFsmState(fsmRef.current.getState());
 
       deepgram.connect(language);
     }
-  }, [isInterviewActive, interviewContext, language, deepgram]);
+  }, [isInterviewActive, interviewContext, language, deepgram, setInterviewStartTime]);
 
   // Update FSM when analysis completes
   useEffect(() => {

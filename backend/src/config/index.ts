@@ -14,12 +14,13 @@ export const config = {
 export function validateConfig() {
   const errors: string[] = [];
 
-  if (!config.deepgramApiKey) {
-    errors.push('DEEPGRAM_API_KEY is required');
+  if (!config.deepgramApiKey || !config.deepgramApiKey.trim()) {
+    errors.push('DEEPGRAM_API_KEY is required and must not be empty');
   }
 
-  if (!config.openaiApiKey && !config.googleApiKey) {
-    errors.push('Either OPENAI_API_KEY or GOOGLE_API_KEY is required');
+  if ((!config.openaiApiKey || !config.openaiApiKey.trim()) && 
+      (!config.googleApiKey || !config.googleApiKey.trim())) {
+    errors.push('Either OPENAI_API_KEY or GOOGLE_API_KEY is required and must not be empty');
   }
 
   if (errors.length > 0) {

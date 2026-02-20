@@ -1,0 +1,149 @@
+// Prisma schema for Interview Management System
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model InterviewSession {
+  id                String   @id @default(uuid())
+  candidateName     String
+  role              String
+  company           String
+  experienceLevel   String
+  interviewerName   String?
+  startTime         DateTime
+  endTime           DateTime?
+  duration          Int?     // in milliseconds
+  
+  // Interviewer Evaluation
+  interviewerOverallScore      Float    @default(0)
+  interviewerRecommendation    String   @default("maybe")
+  interviewerStrengths         String   @default("[]")
+  interviewerConcerns          String   @default("[]")
+  
+  // AI Evaluation
+  aiOverallScore               Float    @default(0)
+  aiRecommendation             String   @default("maybe")
+  aiStrengths                  String   @default("[]")
+  aiConcerns                   String   @default("[]")
+  aiAnalysisText               String?
+  
+  // Legacy fields (for backward compatibility - will be removed later)
+  overallScore      Float    @default(0)
+  recommendation    String   @default("maybe")
+  strengths         String   @default("[]")
+  concerns          String   @default("[]")
+  
+  notes             String?
+  
+  // Relations
+  turns                    Turn[]
+  competencyRatings        CompetencyRating[]
+  sessionNotes             SessionNote[]
+  sessionFeedback          SessionFeedback[]
+  
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+  
+  @@index([role])
+  @@index([interviewerName])
+  @@index([startTime])
+  @@index([interviewerRecommendation])
+  @@index([aiRecommendation])
+}
+
+model Turn {
+  id        String   @id @default(uuid())
+  speaker   String   // interviewer or candidate
+  text      String
+  timestamp DateTime
+  
+  // Foreign key
+  sessionId String
+  session   InterviewSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  
+  @@index([sessionId])
+}
+
+model CompetencyRating {
+  id         String   @id @default(uuid())
+  competency String
+  score      Int      // 1-5
+  evidence   String   // JSON array stored as string
+  concerns   String   // JSON array stored as string
+  weight     Float    // 0-1
+  source     String   @default("interviewer") // "interviewer" or "ai"
+  
+  // Foreign key
+  sessionId  String
+  session    InterviewSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  
+  @@index([sessionId])
+  @@index([competency])
+  @@index([source])
+}
+
+model EvaluationMatrix {
+  id              String   @id @default(uuid())
+  role            String
+  experienceLevel String
+  competencies    String   // JSON stored as string
+  
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  
+  @@unique([role, experienceLevel])
+}
+
+model InterviewTemplate {
+  id              String   @id @default(uuid())
+  name            String
+  role            String
+  company         String?
+  experienceLevel String
+  requiredSkills  String   // JSON array stored as string
+  jobDescription  String?
+  isDefault       Boolean  @default(false)
+  
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  
+  @@index([role])
+  @@index([isDefault])
+}
+
+model SessionNote {
+  id        String   @id @default(uuid())
+  sessionId String
+  timestamp DateTime
+  content   String
+  type      String   // note, flag, highlight
+  
+  session   InterviewSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  
+  createdAt DateTime @default(now())
+  
+  @@index([sessionId])
+  @@index([timestamp])
+}
+
+model SessionFeedback {
+  id              String   @id @default(uuid())
+  sessionId       String
+  questionId      String?
+  feedbackType    String   // question_helpful, rating_accurate, suggestion_useful
+  rating          Int      // 1-5
+  comment         String?
+  
+  session         InterviewSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  
+  createdAt       DateTime @default(now())
+  
+  @@index([sessionId])
+  @@index([feedbackType])
+}
