@@ -2,6 +2,14 @@ import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import type { Turn, Utterance, InterviewContext, InterviewState, RatingData } from './types';
 
+// Batching mechanism for chunk updates to reduce re-renders
+let analysisBatchTimer: NodeJS.Timeout | null = null;
+let questionsBatchTimer: NodeJS.Timeout | null = null;
+let ratingBatchTimer: NodeJS.Timeout | null = null;
+let analysisBatch = '';
+let questionsBatch = '';
+let ratingBatch = '';
+
 interface InterviewStore {
   // Interview state
   interviewState: InterviewState;
@@ -93,12 +101,48 @@ export const useInterviewStore = create<InterviewStore>()(
       setCurrentQuestion: (question) => set({ currentQuestion: question }),
       setCurrentAnswer: (answer) => set({ currentAnswer: answer }),
       setInterimText: (text) => set({ interimText: text }), // FIX: Add interim text action
-      appendAnalysisChunk: (chunk) => set((state) => ({ analysisText: state.analysisText + chunk })),
-      appendQuestionsChunk: (chunk) => set((state) => ({ questionsText: state.questionsText + chunk })),
-      appendRatingChunk: (chunk) => set((state) => ({ ratingText: state.ratingText + chunk })),
-      clearAnalysis: () => set({ analysisText: '' }),
-      clearQuestions: () => set({ questionsText: '' }),
-      clearRating: () => set({ ratingText: '' }),
+      appendAnalysisChunk: (chunk) => {
+        analysisBatch += chunk;
+        if (analysisBatchTimer) clearTimeout(analysisBatchTimer);
+        analysisBatchTimer = setTimeout(() => {
+          const batch = analysisBatch;
+          analysisBatch = '';
+          set((state) => ({ analysisText: state.analysisText + batch }));
+        }, 50); // Batch updates every 50ms
+      },
+      appendQuestionsChunk: (chunk) => {
+        questionsBatch += chunk;
+        if (questionsBatchTimer) clearTimeout(questionsBatchTimer);
+        questionsBatchTimer = setTimeout(() => {
+          const batch = questionsBatch;
+          questionsBatch = '';
+          set((state) => ({ questionsText: state.questionsText + batch }));
+        }, 50);
+      },
+      appendRatingChunk: (chunk) => {
+        ratingBatch += chunk;
+        if (ratingBatchTimer) clearTimeout(ratingBatchTimer);
+        ratingBatchTimer = setTimeout(() => {
+          const batch = ratingBatch;
+          ratingBatch = '';
+          set((state) => ({ ratingText: state.ratingText + batch }));
+        }, 50);
+      },
+      clearAnalysis: () => {
+        analysisBatch = '';
+        if (analysisBatchTimer) clearTimeout(analysisBatchTimer);
+        set({ analysisText: '' });
+      },
+      clearQuestions: () => {
+        questionsBatch = '';
+        if (questionsBatchTimer) clearTimeout(questionsBatchTimer);
+        set({ questionsText: '' });
+      },
+      clearRating: () => {
+        ratingBatch = '';
+        if (ratingBatchTimer) clearTimeout(ratingBatchTimer);
+        set({ ratingText: '' });
+      },
       setIsAnalyzing: (analyzing) => set({ isAnalyzing: analyzing }),
       setIsGeneratingQuestions: (generating) => set({ isGeneratingQuestions: generating }),
       setIsGeneratingRating: (generating) => set({ isGeneratingRating: generating }),

@@ -1,47 +1,139 @@
-import { ChatOpenAI } from '@langchain/openai';
-import { ChatGoogleGenerativeAI } from '@langchain/google-genai';
-import { BaseChatModel } from '@langchain/core/language_models/chat_models';
-import { HumanMessage, SystemMessage } from '@langchain/core/messages';
-import { config } from '../config';
-import type { Turn, InterviewContext } from '../types';
+/**
+ * LangChain service — LLM streaming for interview analysis.
+ * Supports OpenAI (gpt-*) and Google (gemini-*) models with an LRU cache,
+ * per-generation cancellation, and chunk-level timeout protection.
+ */
 
-// Model cache with TTL
+import { ChatOpenAI } from "@langchain/openai";
+import { ChatGoogleGenerativeAI } from "@langchain/google-genai";
+import { BaseChatModel } from "@langchain/core/language_models/chat_models";
+import { HumanMessage, SystemMessage } from "@langchain/core/messages";
+import { config } from "../config";
+import type { Turn, InterviewContext } from "../types";
+
+// ---------------------------------------------------------------------------
+// Constants
+// ---------------------------------------------------------------------------
+
+const MODEL_TTL_MS = 10 * 60 * 1_000;       // 10 min
+const MAX_CACHE_SIZE = 3;
+const CACHE_CLEANUP_INTERVAL_MS = 60 * 1_000; // 1 min
+const LLM_STREAM_TIMEOUT_MS = 60_000;          // 60 s initial connect
+const CHUNK_IDLE_TIMEOUT_MS = 30_000;          // 30 s between chunks
+
+// ---------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------
+
 interface CachedModel {
   model: BaseChatModel;
   createdAt: number;
   lastUsed: number;
 }
 
-const MODEL_TTL_MS = 10 * 60 * 1000; // 10 minutes
-const MAX_CACHE_SIZE = 3;
-const CACHE_CLEANUP_INTERVAL_MS = 60 * 1000; // 1 minute
+export type AnalysisSection = "analysis" | "questions" | "rating";
 
-// Active generation tracking for cancellation
-const activeGenerations = new Set<string>();
+export interface AnalysisChunk {
+  type: AnalysisSection;
+  content: string;
+}
 
-// FIX: Timeout for LLM streaming to prevent hanging connections
-const LLM_STREAM_TIMEOUT_MS = 60000; // 60 seconds
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
 
-// Helper to create a timeout promise
-function createTimeout(ms: number, generationId: string): Promise<never> {
-  return new Promise((_, reject) => {
-    setTimeout(() => {
-      activeGenerations.delete(generationId);
-      reject(new Error(`LLM stream timeout after ${ms}ms`));
-    }, ms);
+/** Rejects after `ms` milliseconds and removes the generation from the set. */
+function rejectAfter(ms: number, label: string): Promise<never> {
+  return new Promise((_, reject) =>
+    setTimeout(
+      () => reject(new Error(`[LangChain] Timed out after ${ms} ms (${label})`)),
+      ms
+    )
+  );
+}
+
+/** Extracts a text string from any LangChain / Gemini chunk shape. */
+function extractContent(chunk: unknown): string {
+  if (typeof chunk === "string") return chunk;
+  if (chunk === null || typeof chunk !== "object") return "";
+
+  const c = chunk as Record<string, unknown>;
+
+  if (c.content !== undefined) {
+    if (typeof c.content === "string") return c.content;
+    if (Array.isArray(c.content)) {
+      return (c.content as unknown[])
+        .map((item) =>
+          typeof item === "string"
+            ? item
+            : typeof item === "object" && item !== null
+            ? String((item as Record<string, unknown>).text ?? "")
+            : ""
+        )
+        .join("");
+    }
+  }
+
+  if (typeof c.text === "string") return c.text;
+  return "";
+}
+
+/** Truncates a turn to a readable summary line. */
+function summariseTurn(t: Turn, maxChars = 150): string {
+  const prefix = t.speaker === "interviewer" ? "Q" : "A";
+  return `${prefix}: ${t.text.substring(0, maxChars)}`;
+}
+
+// ---------------------------------------------------------------------------
+// Model factory
+// ---------------------------------------------------------------------------
+
+function buildModel(modelName: string): BaseChatModel {
+  const shared = { streaming: true, temperature: 0.7 } as const;
+
+  if (modelName.startsWith("gpt-")) {
+    return new ChatOpenAI({ modelName, apiKey: config.openaiApiKey, ...shared });
+  }
+
+  if (modelName.startsWith("gemini-")) {
+    return new ChatGoogleGenerativeAI({
+      model: modelName,
+      apiKey: config.googleApiKey,
+      ...shared,
+    });
+  }
+
+  // Unknown model — fall back to a cheap default and warn.
+  console.warn(
+    `[LangChain] Unknown model "${modelName}", falling back to gpt-4o-mini`
+  );
+  return new ChatOpenAI({
+    modelName: "gpt-4o-mini",
+    apiKey: config.openaiApiKey,
+    ...shared,
   });
 }
 
+// ---------------------------------------------------------------------------
+// LangChainService
+// ---------------------------------------------------------------------------
+
 class LangChainService {
-  private modelCache = new Map<string, CachedModel>();
-  private cleanupInterval: NodeJS.Timeout | null = null;
+  private readonly modelCache = new Map<string, CachedModel>();
+  /** IDs of in-flight generations. Removal = cancellation signal. */
+  private readonly activeGenerations = new Set<string>();
+  private cleanupTimer: NodeJS.Timeout | null = null;
 
   constructor() {
     this.startCacheCleanup();
   }
 
-  private startCacheCleanup() {
-    this.cleanupInterval = setInterval(() => {
+  // -------------------------------------------------------------------------
+  // Model cache
+  // -------------------------------------------------------------------------
+
+  private startCacheCleanup(): void {
+    this.cleanupTimer = setInterval(() => {
       const now = Date.now();
       for (const [key, cached] of this.modelCache.entries()) {
         if (now - cached.lastUsed > MODEL_TTL_MS) {
@@ -59,96 +151,98 @@ class LangChainService {
       return cached.model;
     }
 
-    // Evict LRU if at capacity
+    // Evict LRU entry if at capacity.
     if (this.modelCache.size >= MAX_CACHE_SIZE) {
-      let oldestKey: string | null = null;
-      let oldestTime = Infinity;
+      let lruKey: string | null = null;
+      let lruTime = Infinity;
       for (const [key, c] of this.modelCache.entries()) {
-        if (c.lastUsed < oldestTime) {
-          oldestTime = c.lastUsed;
-          oldestKey = key;
+        if (c.lastUsed < lruTime) {
+          lruTime = c.lastUsed;
+          lruKey = key;
         }
       }
-      if (oldestKey) {
-        this.modelCache.delete(oldestKey);
-        console.log(`[LangChain] Evicted LRU model: ${oldestKey}`);
+      if (lruKey) {
+        this.modelCache.delete(lruKey);
+        console.log(`[LangChain] Evicted LRU model: ${lruKey}`);
       }
     }
 
-    let model: BaseChatModel;
-
-    if (modelName.startsWith('gpt-')) {
-      model = new ChatOpenAI({
-        modelName,
-        apiKey: config.openaiApiKey,
-        streaming: true,
-        temperature: 0.7,
-      });
-    } else if (modelName.startsWith('gemini-')) {
-      model = new ChatGoogleGenerativeAI({
-        model: modelName,
-        apiKey: config.googleApiKey,
-        streaming: true,
-        temperature: 0.7,
-      });
-    } else {
-      model = new ChatOpenAI({
-        modelName: 'gpt-4o-mini',
-        apiKey: config.openaiApiKey,
-        streaming: true,
-        temperature: 0.7,
-      });
-    }
-
+    const model = buildModel(modelName);
     this.modelCache.set(modelName, {
       model,
       createdAt: Date.now(),
       lastUsed: Date.now(),
     });
-
     return model;
   }
 
-  // Safe content extraction from different provider chunks
-  private extractContent(chunk: any): string {
-    // LangChain AIMessageChunk
-    if (chunk?.content !== undefined) {
-      if (typeof chunk.content === 'string') {
-        return chunk.content;
+  // -------------------------------------------------------------------------
+  // Generation lifecycle
+  // -------------------------------------------------------------------------
+
+  registerGeneration(id: string): void {
+    this.activeGenerations.add(id);
+  }
+
+  cancelGeneration(id: string): void {
+    this.activeGenerations.delete(id);
+  }
+
+  isGenerationActive(id: string): boolean {
+    return this.activeGenerations.has(id);
+  }
+
+  // -------------------------------------------------------------------------
+  // Low-level streaming wrapper
+  // -------------------------------------------------------------------------
+
+  /**
+   * Streams chunks from the model, handling:
+   * - Initial connect timeout
+   * - Per-chunk idle timeout
+   * - Cancellation
+   */
+  private async *streamModel(
+    model: BaseChatModel,
+    messages: [SystemMessage, HumanMessage],
+    generationId: string
+  ): AsyncGenerator<string> {
+    const stream = await Promise.race([
+      model.stream(messages),
+      rejectAfter(LLM_STREAM_TIMEOUT_MS, `connect:${generationId}`),
+    ]);
+
+    let lastChunk = Date.now();
+
+    for await (const chunk of stream) {
+      if (!this.isGenerationActive(generationId)) {
+        console.log(`[LangChain] Cancelled: ${generationId}`);
+        return;
       }
-      if (Array.isArray(chunk.content)) {
-        return chunk.content
-          .map((c: any) => (typeof c === 'string' ? c : c?.text || ''))
-          .join('');
+
+      const now = Date.now();
+      if (now - lastChunk > CHUNK_IDLE_TIMEOUT_MS) {
+        console.warn(`[LangChain] Chunk idle timeout: ${generationId}`);
+        return;
       }
+      lastChunk = now;
+
+      const text = extractContent(chunk);
+      if (text) yield text;
     }
-    // Fallback for raw text
-    if (typeof chunk === 'string') {
-      return chunk;
-    }
-    // Gemini format
-    if (chunk?.text) {
-      return chunk.text;
-    }
-    return '';
   }
 
-  // Register generation for cancellation tracking
-  registerGeneration(generationId: string): void {
-    activeGenerations.add(generationId);
-  }
+  // -------------------------------------------------------------------------
+  // Combined analysis (primary method)
+  // -------------------------------------------------------------------------
 
-  // Cancel a generation
-  cancelGeneration(generationId: string): void {
-    activeGenerations.delete(generationId);
-  }
-
-  // Check if generation is still active
-  isGenerationActive(generationId: string): boolean {
-    return activeGenerations.has(generationId);
-  }
-
-  // Single combined analysis - reduces parallel calls
+  /**
+   * Streams a structured analysis, follow-up questions, and a rating in one
+   * LLM call. Yields typed chunks as each section is parsed out.
+   *
+   * Section delimiters in the model response: `===ANALYSIS===`,
+   * `===QUESTIONS===`, `===RATING===`.
+   */
   async *streamCombinedAnalysis(
     question: string,
     answer: string,
@@ -156,17 +250,225 @@ class LangChainService {
     interviewContext: InterviewContext,
     language: string,
     generationId: string,
-    modelName: string = 'gpt-4o-mini'
-  ): AsyncGenerator<{ type: 'analysis' | 'questions' | 'rating'; content: string }> {
+    modelName = "gpt-4o-mini"
+  ): AsyncGenerator<AnalysisChunk> {
     this.registerGeneration(generationId);
     const model = this.getModel(modelName);
 
-    const recentContext = turns.slice(-4).map(t => 
-      `${t.speaker === 'interviewer' ? 'Q' : 'A'}: ${t.text.substring(0, 150)}`
-    ).join('\n');
+    const recentContext = turns
+      .slice(-4)
+      .map((t) => summariseTurn(t))
+      .join("\n");
 
-    const systemPrompt = `You are an expert interview analyst for a ${interviewContext.role} position (${interviewContext.experienceLevel} level).
-Required Skills: ${interviewContext.requiredSkills.join(', ')}
+    const systemPrompt = buildCombinedSystemPrompt(interviewContext, language);
+    const userMessage = recentContext
+      ? `Context:\n${recentContext}\n\n---\n\nQuestion: ${question}\n\nAnswer: ${answer}`
+      : `Question: ${question}\n\nAnswer: ${answer}`;
+
+    try {
+      let buffer = "";
+      let currentSection: AnalysisSection = "analysis";
+
+      for await (const text of this.streamModel(
+        model,
+        [new SystemMessage(systemPrompt), new HumanMessage(userMessage)],
+        generationId
+      )) {
+        buffer += text;
+
+        // Flush complete sections as they arrive.
+        let advanced = true;
+        while (advanced) {
+          advanced = false;
+
+          if (currentSection === "analysis" && buffer.includes("===QUESTIONS===")) {
+            const [before, ...rest] = buffer.split("===QUESTIONS===");
+            const content = before.replace("===ANALYSIS===", "").trim();
+            if (content) yield { type: "analysis", content };
+            buffer = rest.join("===QUESTIONS===");
+            currentSection = "questions";
+            advanced = true;
+          }
+
+          if (currentSection === "questions" && buffer.includes("===RATING===")) {
+            const [before, ...rest] = buffer.split("===RATING===");
+            const content = before.trim();
+            if (content) yield { type: "questions", content };
+            buffer = rest.join("===RATING===");
+            currentSection = "rating";
+            advanced = true;
+          }
+        }
+
+        // Incrementally yield within-section content to keep the UI responsive,
+        // but only when there is no partial section marker in the buffer.
+        const hasPartialMarker = buffer.includes("=");
+        if (buffer.length > 100 && !hasPartialMarker) {
+          yield { type: currentSection, content: buffer };
+          buffer = "";
+        }
+      }
+
+      // Flush anything remaining.
+      const tail = buffer.replace(/^===\w+===\s*/, "").trim();
+      if (tail) yield { type: currentSection, content: tail };
+    } catch (error) {
+      console.error("[LangChain] streamCombinedAnalysis error:", error);
+      throw error;
+    } finally {
+      this.cancelGeneration(generationId);
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // Individual methods (legacy — kept for backward compatibility)
+  // -------------------------------------------------------------------------
+
+  async *streamAnalysis(
+    turns: Turn[],
+    currentQuestion: string,
+    candidateAnswer: string,
+    interviewContext: InterviewContext,
+    language: string,
+    modelName = "gpt-4o-mini"
+  ): AsyncGenerator<string> {
+    const generationId = `analysis-${Date.now()}`;
+    this.registerGeneration(generationId);
+    const model = this.getModel(modelName);
+
+    const recentContext = turns
+      .slice(-4)
+      .map((t) => summariseTurn(t))
+      .join("\n");
+
+    const systemPrompt = `Analyze this ${interviewContext.role} interview response (${interviewContext.experienceLevel} level).
+Skills: ${interviewContext.requiredSkills.join(", ")}
+
+Format:
+**Score: X/5**
+**Strengths:** [bullet points]
+**Concerns:** [bullet points or "None"]
+**Probe:** [what to explore next]
+
+Be specific. Language: ${language}`;
+
+    const userMessage = recentContext
+      ? `Context:\n${recentContext}\n\n---\n\nQ: ${currentQuestion}\n\nA: ${candidateAnswer}`
+      : `Q: ${currentQuestion}\n\nA: ${candidateAnswer}`;
+
+    try {
+      yield* this.streamModel(
+        model,
+        [new SystemMessage(systemPrompt), new HumanMessage(userMessage)],
+        generationId
+      );
+    } catch (error) {
+      console.error("[LangChain] streamAnalysis error:", error);
+      throw error;
+    } finally {
+      this.cancelGeneration(generationId);
+    }
+  }
+
+  async *streamQuestionSuggestions(
+    turns: Turn[],
+    interviewContext: InterviewContext,
+    coveredTopics: string[],
+    language: string,
+    modelName = "gpt-4o-mini"
+  ): AsyncGenerator<string> {
+    const generationId = `questions-${Date.now()}`;
+    this.registerGeneration(generationId);
+    const model = this.getModel(modelName);
+
+    const recentQA = turns
+      .slice(-6)
+      .map((t) => summariseTurn(t, 100))
+      .join("\n");
+
+    const systemPrompt = `Suggest 3 follow-up questions for a ${interviewContext.role} interview (${interviewContext.experienceLevel}).
+Skills: ${interviewContext.requiredSkills.join(", ")}
+Covered: ${coveredTopics.join(", ") || "None"}
+
+Format: One question per line with bullet point.
+Be specific, not generic. Language: ${language}`;
+
+    try {
+      yield* this.streamModel(
+        model,
+        [
+          new SystemMessage(systemPrompt),
+          new HumanMessage(
+            recentQA || "Interview starting. Suggest opening questions."
+          ),
+        ],
+        generationId
+      );
+    } catch (error) {
+      console.error("[LangChain] streamQuestionSuggestions error:", error);
+      throw error;
+    } finally {
+      this.cancelGeneration(generationId);
+    }
+  }
+
+  async *streamRatingSuggestion(
+    question: string,
+    answer: string,
+    competency: string,
+    interviewContext: InterviewContext,
+    modelName = "gpt-4o-mini"
+  ): AsyncGenerator<string> {
+    const generationId = `rating-${Date.now()}`;
+    this.registerGeneration(generationId);
+    const model = this.getModel(modelName);
+
+    const systemPrompt = `Rate this ${interviewContext.role} response for "${competency}" (${interviewContext.experienceLevel} level).
+
+Scale: 1=Poor, 2=Below Avg, 3=Average, 4=Good, 5=Excellent
+
+Format:
+**Rating: X/5**
+**Reason:** [1-2 sentences with specific references]`;
+
+    try {
+      yield* this.streamModel(
+        model,
+        [
+          new SystemMessage(systemPrompt),
+          new HumanMessage(`Q: ${question}\n\nA: ${answer}`),
+        ],
+        generationId
+      );
+    } catch (error) {
+      console.error("[LangChain] streamRatingSuggestion error:", error);
+      throw error;
+    } finally {
+      this.cancelGeneration(generationId);
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // Cleanup
+  // -------------------------------------------------------------------------
+
+  destroy(): void {
+    if (this.cleanupTimer) clearInterval(this.cleanupTimer);
+    this.modelCache.clear();
+    this.activeGenerations.clear();
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Prompt builders (top-level so they are easy to test/tweak independently)
+// ---------------------------------------------------------------------------
+
+function buildCombinedSystemPrompt(
+  ctx: InterviewContext,
+  language: string
+): string {
+  return `You are an expert interview analyst for a ${ctx.role} position (${ctx.experienceLevel} level).
+Required Skills: ${ctx.requiredSkills.join(", ")}
 
 Analyze the Q&A and respond in this EXACT format:
 
@@ -187,237 +489,10 @@ Analyze the Q&A and respond in this EXACT format:
 
 Be specific. Reference the actual answer content.
 Language: ${language}`;
-
-    const userMessage = recentContext 
-      ? `Context:\n${recentContext}\n\n---\n\nQuestion: ${question}\n\nAnswer: ${answer}`
-      : `Question: ${question}\n\nAnswer: ${answer}`;
-
-    try {
-      // FIX: Add timeout wrapper to prevent hanging streams
-      const streamPromise = model.stream([
-        new SystemMessage(systemPrompt),
-        new HumanMessage(userMessage)
-      ]);
-      
-      const stream = await Promise.race([
-        streamPromise,
-        createTimeout(LLM_STREAM_TIMEOUT_MS, generationId)
-      ]);
-
-      let buffer = '';
-      let currentSection: 'analysis' | 'questions' | 'rating' = 'analysis';
-      let lastChunkTime = Date.now();
-
-      for await (const chunk of stream) {
-        // Check cancellation
-        if (!this.isGenerationActive(generationId)) {
-          console.log(`[LangChain] Generation cancelled: ${generationId}`);
-          break;
-        }
-        
-        // FIX: Check for chunk-level timeout (no data for 30 seconds)
-        const now = Date.now();
-        if (now - lastChunkTime > 30000) {
-          console.log(`[LangChain] Chunk timeout: ${generationId}`);
-          break;
-        }
-        lastChunkTime = now;
-
-        const content = this.extractContent(chunk);
-        if (!content) continue;
-
-        buffer += content;
-
-        // FIX: Improved section detection and streaming
-        // Only process section markers when we have complete markers
-        while (true) {
-          // Check for QUESTIONS section marker
-          if (currentSection === 'analysis' && buffer.includes('===QUESTIONS===')) {
-            const parts = buffer.split('===QUESTIONS===');
-            const analysisContent = parts[0].replace('===ANALYSIS===', '').trim();
-            if (analysisContent) {
-              yield { type: 'analysis', content: analysisContent };
-            }
-            buffer = parts.slice(1).join('===QUESTIONS==='); // Handle edge case of multiple markers
-            currentSection = 'questions';
-            continue;
-          }
-          
-          // Check for RATING section marker
-          if (currentSection === 'questions' && buffer.includes('===RATING===')) {
-            const parts = buffer.split('===RATING===');
-            const questionsContent = parts[0].trim();
-            if (questionsContent) {
-              yield { type: 'questions', content: questionsContent };
-            }
-            buffer = parts.slice(1).join('===RATING===');
-            currentSection = 'rating';
-            continue;
-          }
-          
-          break; // No more section markers to process
-        }
-        
-        // Stream content incrementally for better UX (but not too frequently)
-        // Only flush if we have substantial content and no pending section marker
-        const hasPendingMarker = buffer.includes('===') || buffer.includes('==');
-        if (buffer.length > 100 && !hasPendingMarker) {
-          yield { type: currentSection, content: buffer };
-          buffer = '';
-        }
-      }
-
-      // Flush remaining content
-      const finalContent = buffer.replace(/^===\w+===\s*/, '').trim();
-      if (finalContent) {
-        yield { type: currentSection, content: finalContent };
-      }
-
-    } catch (error) {
-      console.error('Error in streamCombinedAnalysis:', error);
-      throw error;
-    } finally {
-      this.cancelGeneration(generationId);
-    }
-  }
-
-  // Legacy individual methods for backward compatibility
-  async *streamAnalysis(
-    turns: Turn[],
-    currentQuestion: string,
-    candidateAnswer: string,
-    interviewContext: InterviewContext,
-    language: string,
-    modelName: string = 'gpt-4o-mini'
-  ): AsyncGenerator<string> {
-    const generationId = `analysis-${Date.now()}`;
-    this.registerGeneration(generationId);
-    const model = this.getModel(modelName);
-
-    const recentContext = turns.slice(-4).map(t => 
-      `${t.speaker === 'interviewer' ? 'Q' : 'A'}: ${t.text.substring(0, 150)}`
-    ).join('\n');
-
-    const systemPrompt = `Analyze this ${interviewContext.role} interview response (${interviewContext.experienceLevel} level).
-Skills: ${interviewContext.requiredSkills.join(', ')}
-
-Format:
-**Score: X/5**
-**Strengths:** [bullet points]
-**Concerns:** [bullet points or "None"]
-**Probe:** [what to explore next]
-
-Be specific. Language: ${language}`;
-
-    try {
-      const userMessage = recentContext 
-        ? `Context:\n${recentContext}\n\n---\n\nQ: ${currentQuestion}\n\nA: ${candidateAnswer}`
-        : `Q: ${currentQuestion}\n\nA: ${candidateAnswer}`;
-
-      const stream = await model.stream([
-        new SystemMessage(systemPrompt),
-        new HumanMessage(userMessage)
-      ]);
-
-      for await (const chunk of stream) {
-        if (!this.isGenerationActive(generationId)) break;
-        const content = this.extractContent(chunk);
-        if (content) yield content;
-      }
-    } catch (error) {
-      console.error('Error in streamAnalysis:', error);
-      throw error;
-    } finally {
-      this.cancelGeneration(generationId);
-    }
-  }
-
-  async *streamQuestionSuggestions(
-    turns: Turn[],
-    interviewContext: InterviewContext,
-    coveredTopics: string[],
-    language: string,
-    modelName: string = 'gpt-4o-mini'
-  ): AsyncGenerator<string> {
-    const generationId = `questions-${Date.now()}`;
-    this.registerGeneration(generationId);
-    const model = this.getModel(modelName);
-
-    const recentQA = turns.slice(-6).map(t => 
-      `${t.speaker === 'interviewer' ? 'Q' : 'A'}: ${t.text.substring(0, 100)}`
-    ).join('\n');
-
-    const systemPrompt = `Suggest 3 follow-up questions for a ${interviewContext.role} interview (${interviewContext.experienceLevel}).
-Skills: ${interviewContext.requiredSkills.join(', ')}
-Covered: ${coveredTopics.join(', ') || 'None'}
-
-Format: One question per line with bullet point.
-Be specific, not generic. Language: ${language}`;
-
-    try {
-      const stream = await model.stream([
-        new SystemMessage(systemPrompt),
-        new HumanMessage(recentQA || 'Interview starting. Suggest opening questions.')
-      ]);
-
-      for await (const chunk of stream) {
-        if (!this.isGenerationActive(generationId)) break;
-        const content = this.extractContent(chunk);
-        if (content) yield content;
-      }
-    } catch (error) {
-      console.error('Error in streamQuestionSuggestions:', error);
-      throw error;
-    } finally {
-      this.cancelGeneration(generationId);
-    }
-  }
-
-  async *streamRatingSuggestion(
-    question: string,
-    answer: string,
-    competency: string,
-    interviewContext: InterviewContext,
-    modelName: string = 'gpt-4o-mini'
-  ): AsyncGenerator<string> {
-    const generationId = `rating-${Date.now()}`;
-    this.registerGeneration(generationId);
-    const model = this.getModel(modelName);
-
-    const systemPrompt = `Rate this ${interviewContext.role} response for "${competency}" (${interviewContext.experienceLevel} level).
-
-Scale: 1=Poor, 2=Below Avg, 3=Average, 4=Good, 5=Excellent
-
-Format:
-**Rating: X/5**
-**Reason:** [1-2 sentences with specific references]`;
-
-    try {
-      const stream = await model.stream([
-        new SystemMessage(systemPrompt),
-        new HumanMessage(`Q: ${question}\n\nA: ${answer}`)
-      ]);
-
-      for await (const chunk of stream) {
-        if (!this.isGenerationActive(generationId)) break;
-        const content = this.extractContent(chunk);
-        if (content) yield content;
-      }
-    } catch (error) {
-      console.error('Error in streamRatingSuggestion:', error);
-      throw error;
-    } finally {
-      this.cancelGeneration(generationId);
-    }
-  }
-
-  destroy() {
-    if (this.cleanupInterval) {
-      clearInterval(this.cleanupInterval);
-    }
-    this.modelCache.clear();
-    activeGenerations.clear();
-  }
 }
+
+// ---------------------------------------------------------------------------
+// Singleton export
+// ---------------------------------------------------------------------------
 
 export const langchainService = new LangChainService();

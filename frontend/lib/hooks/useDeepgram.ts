@@ -72,9 +72,9 @@ export function useDeepgram({ onTranscript, onUtteranceEnd, onError }: UseDeepgr
       // Keepalive - stored in ref for proper cleanup
       keepaliveRef.current = setInterval(() => {
         if (connection?.getReadyState() === 1) {
-          try { connection.send(new ArrayBuffer(0)); } catch {}
+          try { connection.keepAlive(); } catch {}
         }
-      }, 5000);
+      }, 3000);
 
       connection.on(LiveTranscriptionEvents.Open, () => {
         console.log('[Deepgram] Connected');
