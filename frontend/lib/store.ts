@@ -40,6 +40,12 @@ interface InterviewStore {
   // Language
   language: string;
   
+  // Inactivity timer
+  lastActivityTime: number | null;
+  inactivityWarningTime: number | null; // When to show warning (e.g., 2 min before expiry)
+  INACTIVITY_LIMIT_MS: number; // 15 minutes
+  WARNING_BEFORE_MS: number; // 2 minutes
+  
   // Actions
   setInterviewState: (state: InterviewState) => void;
   setInterviewActive: (active: boolean) => void;
@@ -64,11 +70,16 @@ interface InterviewStore {
   addCoveredTopic: (topic: string) => void;
   setLanguage: (language: string) => void;
   resetInterview: () => void;
+  
+  // Inactivity timer actions
+  updateLastActivity: () => void;
+  checkInactivity: () => boolean; // Returns true if session should expire
+  clearInactivityTimer: () => void;
 }
 
 export const useInterviewStore = create<InterviewStore>()(
   persist(
-    (set) => ({
+    (set, get) => ({
       // Initial state
       interviewState: 'SETUP',
       isInterviewActive: false,
@@ -89,6 +100,12 @@ export const useInterviewStore = create<InterviewStore>()(
       ratings: [],
       coveredTopics: [],
       language: 'en',
+  
+  // Inactivity timer
+  lastActivityTime: null,
+  inactivityWarningTime: null,
+  INACTIVITY_LIMIT_MS: 15 * 60 * 1000, // 15 minutes
+  WARNING_BEFORE_MS: 2 * 60 * 1000, // 2 minutes
 
       // Actions
       setInterviewState: (state) => set({ interviewState: state }),
@@ -151,6 +168,35 @@ export const useInterviewStore = create<InterviewStore>()(
         coveredTopics: state.coveredTopics.includes(topic) ? state.coveredTopics : [...state.coveredTopics, topic] 
       })),
       setLanguage: (language) => set({ language }),
+      
+      // Inactivity timer actions
+      updateLastActivity: () => {
+        const now = Date.now();
+        set({ 
+          lastActivityTime: now,
+          inactivityWarningTime: now + (15 * 60 * 1000) - (2 * 60 * 1000) // 2 min before expiry
+        });
+      },
+      
+      checkInactivity: () => {
+        const state = get();
+        if (!state.lastActivityTime) return false;
+        
+        const elapsed = Date.now() - state.lastActivityTime;
+        const shouldExpire = elapsed >= state.INACTIVITY_LIMIT_MS;
+        
+        if (shouldExpire) {
+          // Clear localStorage on expiry
+          localStorage.removeItem('interview-storage');
+        }
+        
+        return shouldExpire;
+      },
+      
+      clearInactivityTimer: () => set({ 
+        lastActivityTime: null, 
+        inactivityWarningTime: null 
+      }),
       resetInterview: () => set({
         interviewState: 'SETUP',
         isInterviewActive: false,
@@ -169,6 +215,9 @@ export const useInterviewStore = create<InterviewStore>()(
         isGeneratingRating: false,
         ratings: [],
         coveredTopics: [],
+        // Inactivity timer
+        lastActivityTime: null,
+        inactivityWarningTime: null,
       }),
     }),
     {

@@ -7,7 +7,11 @@ import deepgramRouter from './routes/deepgram';
 import sessionsRouter from './routes/sessions';
 import templatesRouter from './routes/templates';
 import authRouter from './routes/auth';
+import logsRouter from './routes/logs';
+import candidatesRouter from './routes/candidates';
+import resumeRouter from './routes/resume';
 import { initializeSocketIO } from './socket/interviewerSocketHandler';
+import { logger } from './utils/logger';
 
 async function startServer() {
   try {
@@ -31,6 +35,9 @@ async function startServer() {
     app.use('/api', sessionsRouter);
     app.use('/api', templatesRouter);
     app.use('/api', authRouter);
+    app.use('/api', logsRouter);
+    app.use('/api', candidatesRouter);
+    app.use('/api', resumeRouter);
 
     const io = new Server(httpServer, {
       cors: {
@@ -45,25 +52,25 @@ async function startServer() {
     initializeSocketIO(io);
 
     httpServer.listen(config.port, () => {
-      console.log(`✅ Server running on port ${config.port}`);
-      console.log(`✅ Frontend URL: ${config.frontendUrl}`);
-      console.log(`✅ Environment: ${config.nodeEnv}`);
+      logger.info(`Server running on port ${config.port}`);
+      logger.info(`Frontend URL: ${config.frontendUrl}`);
+      logger.info(`Environment: ${config.nodeEnv}`);
     });
 
     // Graceful shutdown handler
     const shutdown = async () => {
-      console.log('\n🛑 Shutting down gracefully...');
+      logger.info('Shutting down gracefully...');
       try {
         const { prismaStorageService } = await import('./services/prismaStorageService');
         await prismaStorageService.disconnect();
         const { langchainService } = await import('./services/langchainService');
         langchainService.destroy();
         httpServer.close(() => {
-          console.log('✅ Server closed');
+          logger.info('Server closed');
           process.exit(0);
         });
       } catch (error) {
-        console.error('❌ Error during shutdown:', error);
+        logger.error('Error during shutdown', { error });
         process.exit(1);
       }
     };
@@ -71,7 +78,7 @@ async function startServer() {
     process.on('SIGTERM', shutdown);
     process.on('SIGINT', shutdown);
   } catch (error) {
-    console.error('❌ Failed to start server:', error);
+    logger.error('Failed to start server', { error });
     process.exit(1);
   }
 }

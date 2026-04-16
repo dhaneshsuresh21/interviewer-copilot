@@ -1,5 +1,6 @@
 import { useRef, useCallback, useEffect } from 'react';
 import type { DeepgramResult, Utterance } from '../types';
+import { CONFIDENCE_THRESHOLD } from '../intentClassifier';
 
 interface UseUtteranceBuilderProps {
   onUtteranceComplete: (utterance: Utterance) => void;
@@ -9,8 +10,8 @@ interface UseUtteranceBuilderProps {
 // Increased silence threshold to reduce false triggers from natural pauses
 const SILENCE_CHECK_MS = 2500;
 
-// Minimum confidence to consider a transcript reliable
-const MIN_CONFIDENCE_THRESHOLD = 0.65;
+// Minimum confidence to consider a transcript reliable (uses shared threshold)
+const MIN_CONFIDENCE_THRESHOLD = CONFIDENCE_THRESHOLD;
 
 // Minimum words before we consider finalizing
 const MIN_WORDS_TO_FINALIZE = 3;

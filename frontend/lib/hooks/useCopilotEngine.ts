@@ -4,8 +4,9 @@ import { useDeepgram } from './useDeepgram';
 import { useSocketAnalysis } from './useSocketAnalysis';
 import { useUtteranceBuilder } from './useUtteranceBuilder';
 import { ConversationStateMachine } from '../ConversationStateMachine';
-import { classifyIntent, shouldAutoTrigger, ConversationState } from '../intentClassifier';
+import { classifyIntent, shouldAutoTrigger, ConversationState, CONFIDENCE_THRESHOLD, MIN_QUESTION_CONFIDENCE } from '../intentClassifier';
 import type { DeepgramResult, Utterance } from '../types';
+import { logTranscriptEvent } from '../transcriptLogger';
 
 export function useCopilotEngine() {
   const {
@@ -25,6 +26,7 @@ export function useCopilotEngine() {
     isAnalyzing,
     isGeneratingQuestions,
     isGeneratingRating,
+    updateLastActivity, // Add inactivity timer
   } = useInterviewStore();
 
   const { analyze, cancel, isConnected: socketConnected } = useSocketAnalysis();
@@ -35,6 +37,7 @@ export function useCopilotEngine() {
   // Question/answer tracking
   const questionRef = useRef('');
   const answerRef = useRef('');
+  const questionReceivedTimeRef = useRef(0);
   
   // Enhanced trigger tracking
   const lastTriggerTimeRef = useRef(0);
@@ -43,10 +46,12 @@ export function useCopilotEngine() {
   const utteranceEndCountRef = useRef(0);
   const confidenceSamplesRef = useRef<number[]>([]);
   
-  // Increased debounce and minimum words
+  // Debounce between consecutive triggers
   const TRIGGER_DEBOUNCE_MS = 5000;
+  // Minimum time after a question is received before analysis can fire.
+  // Prevents triggering on the first sentence of a multi-sentence answer.
+  const MIN_ANSWER_ACCUMULATION_MS = 10_000;
   const MIN_WORDS = 8;
-  const MIN_CONFIDENCE = 0.65;
   
   const [fsmState, setFsmState] = useState(fsmRef.current.getState());
 
@@ -65,10 +70,18 @@ export function useCopilotEngine() {
     const question = questionRef.current.trim();
     const answer = answerRef.current.trim();
 
-    // Debounce - increased to 5 seconds
     const now = Date.now();
+
+    // Debounce between consecutive triggers
     if (now - lastTriggerTimeRef.current < TRIGGER_DEBOUNCE_MS) {
       console.log('[Engine] Trigger debounced');
+      return false;
+    }
+
+    // Minimum accumulation window — don't fire on the first sentence of a long answer
+    if (now - questionReceivedTimeRef.current < MIN_ANSWER_ACCUMULATION_MS) {
+      console.log('[Engine] Too soon after question received');
+      logTranscriptEvent({ event: 'TRIGGER_DECISION', trigger: false, triggerReason: 'Too soon after question received', silenceMs: 0 });
       return false;
     }
 
@@ -88,9 +101,8 @@ export function useCopilotEngine() {
       return false;
     }
 
-    // FIX: Use consistent confidence threshold (MIN_CONFIDENCE = 0.65)
     const avgConfidence = getAvgConfidence();
-    if (avgConfidence < MIN_CONFIDENCE) {
+    if (avgConfidence < CONFIDENCE_THRESHOLD) {
       console.log('[Engine] Confidence too low:', avgConfidence.toFixed(2));
       return false;
     }
@@ -104,6 +116,16 @@ export function useCopilotEngine() {
     console.log('[Engine] === TRIGGERING ANALYSIS ===');
     console.log('  Q:', question.substring(0, 60));
     console.log('  A:', answer.substring(0, 60), `(${wordCount} words, conf: ${avgConfidence.toFixed(2)})`);
+
+    logTranscriptEvent({
+      event: 'ANALYSIS_TRIGGERED',
+      meta: {
+        question: question.substring(0, 120),
+        answer: answer.substring(0, 120),
+        wordCount,
+        avgConfidence,
+      },
+    });
 
     lastTriggerTimeRef.current = now;
 
@@ -132,15 +154,18 @@ export function useCopilotEngine() {
     fsmRef.current.dispatch('ANALYZE');
     setFsmState(fsmRef.current.getState());
 
-    // Reset tracking state
+    // Reset tracking state — clear both question and answer so post-analysis
+    // speech cannot accumulate against the stale question and cause re-triggers.
+    questionRef.current = '';
     answerRef.current = '';
+    setCurrentQuestion('');
     setCurrentAnswer('');
     consecutiveSilentEventsRef.current = 0;
     utteranceEndCountRef.current = 0;
     confidenceSamplesRef.current = [];
 
     return true;
-  }, [interviewContext, turns, language, coveredTopics, analyze, isAnalyzing, isGeneratingQuestions, isGeneratingRating, socketConnected, addTurn, setCurrentAnswer, getAvgConfidence]);
+  }, [interviewContext, turns, language, coveredTopics, analyze, isAnalyzing, isGeneratingQuestions, isGeneratingRating, socketConnected, addTurn, setCurrentQuestion, setCurrentAnswer, getAvgConfidence]);
 
   useEffect(() => {
     triggerRef.current = triggerAnalysisInternal;
@@ -170,16 +195,53 @@ export function useCopilotEngine() {
       turnsSinceQuestion: utteranceEndCountRef.current,
     };
 
+    const wordCount = text.trim().split(/\s+/).filter(Boolean).length;
     const intent = classifyIntent(text, conversationState);
     console.log(`[Engine] Utterance: "${text.substring(0, 50)}..." -> ${intent.intent} (conf: ${utterance.confidence.toFixed(2)})`);
 
+    logTranscriptEvent({
+      event: 'UTTERANCE_FINALIZED',
+      text,
+      confidence: utterance.confidence,
+      wordCount,
+    });
+
+    logTranscriptEvent({
+      event: 'INTENT_CLASSIFIED',
+      text,
+      wordCount,
+      intent: intent.intent,
+      intentConf: intent.confidence,
+      reason: intent.reason,
+      isQuestion: intent.isInterviewerQuestion,
+      isAnswer: intent.isAnswer,
+      fsmState: fsmRef.current.getState(),
+      meta: {
+        hasActiveQuestion: conversationState.hasActiveQuestion,
+        answerWordCount: conversationState.answerWordCount,
+        isCandidateClarification: intent.isCandidateClarification,
+      },
+    });
+
     // Only treat as main question if it's an interviewer question (not candidate clarification)
-    if (intent.isInterviewerQuestion) {
-      // FIX: Reset the candidate utterance builder when new question arrives
-      candidateUtteranceBuilder.reset();
+    // and the utterance has sufficient confidence — garbage ASR fragments ending
+    // with '?' must not reset the Q&A cycle.
+    if (intent.isInterviewerQuestion && utterance.confidence >= MIN_QUESTION_CONFIDENCE) {
+      // Flush any substantial pending answer before accepting the new question.
+      // This is the primary safety net when the silence-based trigger misses.
+      const pendingAnswer = answerRef.current.trim();
+      const pendingWords = pendingAnswer.split(/\s+/).filter(Boolean).length;
+      if (questionRef.current && pendingWords >= MIN_WORDS) {
+        console.log(`[Engine] New question — flushing ${pendingWords}-word pending answer`);
+        logTranscriptEvent({ event: 'ANALYSIS_TRIGGERED', meta: { trigger: 'new_question_flush', pendingWords } });
+        triggerRef.current();
+      }
+
+      utteranceBuilder.reset();
       
       questionRef.current = text;
       answerRef.current = '';
+      questionReceivedTimeRef.current = Date.now();
       setCurrentQuestion(text);
       setCurrentAnswer('');
       consecutiveSilentEventsRef.current = 0;
@@ -187,6 +249,12 @@ export function useCopilotEngine() {
       
       fsmRef.current.dispatch('QUESTION_RECEIVED');
       setFsmState(fsmRef.current.getState());
+
+      logTranscriptEvent({
+        event: 'FSM_TRANSITION',
+        fsmState: fsmRef.current.getState(),
+        meta: { event: 'QUESTION_RECEIVED', question: text.substring(0, 120) },
+      });
       
     } else if (questionRef.current) {
       // Accumulate answer (including candidate clarifications as part of answer)
@@ -200,26 +268,23 @@ export function useCopilotEngine() {
       if (intent.isAnswer) {
         fsmRef.current.dispatch('ANSWER_RECEIVED');
         setFsmState(fsmRef.current.getState());
+
+        logTranscriptEvent({
+          event: 'FSM_TRANSITION',
+          fsmState: fsmRef.current.getState(),
+          meta: { event: 'ANSWER_RECEIVED', answerSoFar: answerRef.current.substring(0, 120) },
+        });
       }
     }
   }, [addUtterance, setCurrentQuestion, setCurrentAnswer]);
 
-  // Utterance builder - FIX: Create separate builders for interviewer and candidate
-  // to properly track speaker context
-  const interviewerUtteranceBuilder = useUtteranceBuilder({
+  // Single utterance builder — speaker is assigned *after* classification,
+  // breaking the circular dependency where FSM state decided the speaker
+  // label before classification could update the FSM.
+  const utteranceBuilder = useUtteranceBuilder({
     onUtteranceComplete: handleUtteranceComplete,
-    speaker: 'interviewer',
+    speaker: 'interviewer', // default; overridden in handleUtteranceComplete
   });
-
-  const candidateUtteranceBuilder = useUtteranceBuilder({
-    onUtteranceComplete: handleUtteranceComplete,
-    speaker: 'candidate',
-  });
-
-  // Get the active utterance builder based on FSM state
-  const getActiveUtteranceBuilder = useCallback(() => {
-    return fsmRef.current.hasQuestion() ? candidateUtteranceBuilder : interviewerUtteranceBuilder;
-  }, [interviewerUtteranceBuilder, candidateUtteranceBuilder]);
 
   // Handle Deepgram transcript
   const handleTranscript = useCallback((result: DeepgramResult) => {
@@ -227,34 +292,27 @@ export function useCopilotEngine() {
     lastSpeechTimeRef.current = Date.now();
     consecutiveSilentEventsRef.current = 0; // Reset on any speech
     
-    // FIX: Show interim results in real-time for better UX
     if (!result.isFinal) {
-      // Update interim text for real-time display
-      const activeBuilder = getActiveUtteranceBuilder();
-      const currentText = activeBuilder.getCurrentText();
+      const currentText = utteranceBuilder.getCurrentText();
       const interimDisplay = currentText ? `${currentText} ${result.text}` : result.text;
       setInterimText(interimDisplay);
     } else {
-      // Clear interim text when we get final result
       setInterimText('');
     }
     
-    // FIX: Route to correct utterance builder based on current FSM state
-    const activeBuilder = getActiveUtteranceBuilder();
-    activeBuilder.processResult(result);
-  }, [getActiveUtteranceBuilder, setInterimText]);
+    utteranceBuilder.processResult(result);
+  }, [utteranceBuilder, setInterimText]);
 
   // Handle Deepgram utterance end - improved auto-trigger logic
   const handleUtteranceEnd = useCallback(() => {
     console.log('[Engine] UtteranceEnd fired');
     utteranceEndCountRef.current++;
     
-    // FIX: Force finalize any pending utterance in the active builder
-    const activeBuilder = getActiveUtteranceBuilder();
-    const pendingText = activeBuilder.getCurrentText();
-    if (pendingText && activeBuilder.getWordCount() >= 3) {
+    // Force finalize any pending utterance in the builder
+    const pendingText = utteranceBuilder.getCurrentText();
+    if (pendingText && utteranceBuilder.getWordCount() >= 3) {
       console.log('[Engine] Forcing utterance finalization on UtteranceEnd');
-      activeBuilder.forceFinalize();
+      utteranceBuilder.forceFinalize();
     }
     
     if (!questionRef.current) {
@@ -291,11 +349,23 @@ export function useCopilotEngine() {
 
     console.log(`[Engine] Trigger decision: ${triggerResult.trigger ? 'YES' : 'NO'} - ${triggerResult.reason} (conf: ${triggerResult.confidence.toFixed(2)})`);
 
-    // FIX: Use consistent confidence threshold (MIN_CONFIDENCE = 0.65 instead of 0.7)
-    if (triggerResult.trigger && triggerResult.confidence >= MIN_CONFIDENCE) {
+    logTranscriptEvent({
+      event: 'TRIGGER_DECISION',
+      trigger: triggerResult.trigger,
+      triggerReason: triggerResult.reason,
+      silenceMs,
+      meta: {
+        wordCount,
+        avgConfidence,
+        consecutiveSilentUtterances: consecutiveSilentEventsRef.current,
+        triggerConfidence: triggerResult.confidence,
+      },
+    });
+
+    if (triggerResult.trigger && triggerResult.confidence >= CONFIDENCE_THRESHOLD) {
       triggerRef.current();
     }
-  }, [getAvgConfidence, getActiveUtteranceBuilder]);
+  }, [getAvgConfidence, utteranceBuilder]);
 
   // Deepgram hook
   const deepgram = useDeepgram({
@@ -311,7 +381,9 @@ export function useCopilotEngine() {
       console.log('[Engine] Starting interview');
 
       // FIX: Set interview start time
-      setInterviewStartTime(Date.now());
+      const now = Date.now();
+      setInterviewStartTime(now);
+      updateLastActivity(); // Initialize inactivity timer
 
       fsmRef.current.dispatch('START');
       setFsmState(fsmRef.current.getState());
@@ -379,12 +451,12 @@ export function useCopilotEngine() {
 
   const clearAnswer = useCallback(() => {
     answerRef.current = '';
-    candidateUtteranceBuilder.reset();
+    utteranceBuilder.reset();
     setCurrentAnswer('');
     consecutiveSilentEventsRef.current = 0;
     utteranceEndCountRef.current = 0;
     confidenceSamplesRef.current = [];
-  }, [setCurrentAnswer, candidateUtteranceBuilder]);
+  }, [setCurrentAnswer, utteranceBuilder]);
 
   const canStartAnalysis = useCallback(() => {
     return !isAnalyzing && !isGeneratingQuestions && !isGeneratingRating &&
@@ -398,8 +470,7 @@ export function useCopilotEngine() {
     deepgram.stopMicrophone();
     deepgram.disconnect();
     cancel();
-    interviewerUtteranceBuilder.destroy();
-    candidateUtteranceBuilder.destroy();
+    utteranceBuilder.destroy();
 
     fsmRef.current.dispatch('END');
     fsmRef.current.reset();
@@ -413,7 +484,7 @@ export function useCopilotEngine() {
 
     setInterviewActive(false);
     resetInterview();
-  }, [deepgram, cancel, interviewerUtteranceBuilder, candidateUtteranceBuilder, setInterviewActive, resetInterview]);
+  }, [deepgram, cancel, utteranceBuilder, setInterviewActive, resetInterview]);
 
   const getCurrentState = useCallback(() => fsmState, [fsmState]);
 

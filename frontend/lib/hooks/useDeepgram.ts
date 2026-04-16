@@ -2,6 +2,7 @@ import { useRef, useCallback, useState, useEffect } from 'react';
 import { createClient, LiveTranscriptionEvents } from '@deepgram/sdk';
 import type { DeepgramResult } from '../types';
 import { API_BASE_URL } from '../constants';
+import { logTranscriptEvent } from '../transcriptLogger';
 
 interface UseDeepgramProps {
   onTranscript: (result: DeepgramResult) => void;
@@ -80,30 +81,44 @@ export function useDeepgram({ onTranscript, onUtteranceEnd, onError }: UseDeepgr
         console.log('[Deepgram] Connected');
         setIsConnected(true);
         isConnectingRef.current = false;
+        logTranscriptEvent({ event: 'DEEPGRAM_CONNECTED', meta: { language } });
       });
 
       connection.on(LiveTranscriptionEvents.Transcript, (data: any) => {
         const alt = data.channel?.alternatives?.[0];
         if (!alt?.transcript) return;
 
-        // Use ref to get latest callback
-        onTranscriptRef.current({
+        const result: DeepgramResult = {
           text: alt.transcript,
           confidence: alt.confidence || 0,
           isFinal: data.is_final || false,
           speechFinal: data.speech_final || false,
-        });
+        };
+
+        if (result.isFinal) {
+          logTranscriptEvent({
+            event: 'TRANSCRIPT',
+            text: result.text,
+            confidence: result.confidence,
+            isFinal: result.isFinal,
+            speechFinal: result.speechFinal,
+            wordCount: result.text.trim().split(/\s+/).filter(Boolean).length,
+          });
+        }
+
+        onTranscriptRef.current(result);
       });
 
       connection.on(LiveTranscriptionEvents.UtteranceEnd, () => {
         console.log('[Deepgram] UtteranceEnd event fired');
-        // Use ref to get latest callback
+        logTranscriptEvent({ event: 'UTTERANCE_END' });
         onUtteranceEndRef.current();
       });
 
       connection.on(LiveTranscriptionEvents.Error, (err: any) => {
         console.error('[Deepgram] Error:', err);
         isConnectingRef.current = false;
+        logTranscriptEvent({ event: 'DEEPGRAM_ERROR', meta: { message: err.message } });
         onErrorRef.current?.(new Error(err.message || 'Deepgram error'));
       });
 
@@ -111,6 +126,7 @@ export function useDeepgram({ onTranscript, onUtteranceEnd, onError }: UseDeepgr
         console.log('[Deepgram] Closed');
         setIsConnected(false);
         isConnectingRef.current = false;
+        logTranscriptEvent({ event: 'DEEPGRAM_DISCONNECTED' });
       });
 
     } catch (error) {

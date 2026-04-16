@@ -467,8 +467,12 @@ function buildCombinedSystemPrompt(
   ctx: InterviewContext,
   language: string
 ): string {
+  const resumeSection = ctx.candidateResume
+    ? `\nCandidate Resume:\n${ctx.candidateResume.substring(0, 3000)}\n`
+    : "";
+
   return `You are an expert interview analyst for a ${ctx.role} position (${ctx.experienceLevel} level).
-Required Skills: ${ctx.requiredSkills.join(", ")}
+Required Skills: ${ctx.requiredSkills.join(", ")}${resumeSection}
 
 Analyze the Q&A and respond in this EXACT format:
 

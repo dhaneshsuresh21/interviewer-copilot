@@ -11,7 +11,7 @@ interface Candidate {
   candidateId: string;
   role: string;
   company: string;
-  interviewDate: number;
+  startTime: number;
   
   // Interviewer evaluation
   interviewerOverallScore?: number;
@@ -108,7 +108,7 @@ export default function ComparisonDashboard() {
     // Sort
     filtered.sort((a, b) => {
       if (sortBy === 'score') return b.overallScore - a.overallScore;
-      if (sortBy === 'date') return b.interviewDate - a.interviewDate;
+      if (sortBy === 'date') return b.startTime - a.startTime;
       if (sortBy === 'name') return a.candidateName.localeCompare(b.candidateName);
       return 0;
     });
@@ -367,7 +367,7 @@ export default function ComparisonDashboard() {
                     <td className="px-6 py-4 text-sm font-medium text-gray-300">{candidate.role}</td>
                     <td className="px-6 py-4 text-sm capitalize font-medium text-gray-300">{candidate.experienceLevel}</td>
                     <td className="px-6 py-4 text-sm text-gray-400">
-                      {new Date(candidate.interviewDate).toLocaleDateString()}
+                      {new Date(candidate.startTime).toLocaleDateString()}
                     </td>
                     <td className="px-6 py-4">
                       <span className={`px-4 py-2 rounded-full font-bold text-lg ${getScoreColor(candidate.overallScore)}`}>

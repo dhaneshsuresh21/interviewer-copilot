@@ -8,7 +8,7 @@ interface Candidate {
   candidateName: string;
   role: string;
   company: string;
-  interviewDate: number;
+  startTime: number;
   overallScore: number;
   competencyRatings: Array<{
     competency: string;
@@ -108,7 +108,7 @@ export default function BulkComparisonModal({ candidates, onClose }: BulkCompari
         <div><strong>Role:</strong> ${candidate.role}</div>
         <div><strong>Company:</strong> ${candidate.company}</div>
         <div><strong>Experience:</strong> ${candidate.experienceLevel}</div>
-        <div><strong>Interview Date:</strong> ${new Date(candidate.interviewDate).toLocaleDateString()}</div>
+        <div><strong>Interview Date:</strong> ${new Date(candidate.startTime).toLocaleDateString()}</div>
         
         <div class="score ${candidate.overallScore >= 4 ? 'score-high' : candidate.overallScore >= 3 ? 'score-mid' : 'score-low'}">
           ${candidate.overallScore.toFixed(1)}/5.0
@@ -194,7 +194,7 @@ export default function BulkComparisonModal({ candidates, onClose }: BulkCompari
         role: c.role,
         company: c.company,
         experienceLevel: c.experienceLevel,
-        interviewDate: new Date(c.interviewDate).toISOString(),
+        interviewDate: new Date(c.startTime).toISOString(),
         overallScore: c.overallScore,
         recommendation: c.recommendation,
         competencyRatings: c.competencyRatings,

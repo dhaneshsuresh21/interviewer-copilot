@@ -8,6 +8,8 @@ export interface Turn {
 
 export interface InterviewContext {
   candidateName: string;
+  candidateEmail: string;
+  candidatePhone: string;
   role: string;
   company: string;
   requiredSkills: string[];
@@ -55,6 +57,9 @@ export interface CompetencyRating {
 export interface InterviewSession {
   id: string;
   candidateName: string;
+  candidateEmail?: string;
+  candidatePhone?: string;
+  resumeText?: string;
   role: string;
   company: string;
   experienceLevel: string;
