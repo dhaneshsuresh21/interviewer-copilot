@@ -235,6 +235,9 @@ function EvaluateContent() {
       const session = {
         id: `session-${Date.now()}-${Math.random().toString(36).substring(2, 11)}`,
         candidateName: interviewContext!.candidateName,
+        candidateEmail: interviewContext!.candidateEmail,
+        candidatePhone: interviewContext!.candidatePhone,
+        resumeText: interviewContext!.candidateResume,
         role: interviewContext!.role,
         company: interviewContext!.company,
         experienceLevel: interviewContext!.experienceLevel,

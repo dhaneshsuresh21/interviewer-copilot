@@ -122,6 +122,8 @@ async function main() {
     data: {
       id: 'session-001',
       candidateName: 'Sarah Chen',
+      candidateEmail: 'sarah.chen@email.com',
+      candidatePhone: '+1-555-0101',
       role: 'Software Engineer',
       company: 'TechCorp',
       experienceLevel: 'senior',
@@ -313,6 +315,8 @@ async function main() {
     data: {
       id: 'session-002',
       candidateName: 'Michael Rodriguez',
+      candidateEmail: 'michael.rodriguez@email.com',
+      candidatePhone: '+1-555-0102',
       role: 'Software Engineer',
       company: 'TechCorp',
       experienceLevel: 'senior',
@@ -502,6 +506,8 @@ async function main() {
     data: {
       id: 'session-003',
       candidateName: 'Emily Watson',
+      candidateEmail: 'emily.watson@email.com',
+      candidatePhone: '+1-555-0103',
       role: 'Software Engineer',
       company: 'TechCorp',
       experienceLevel: 'mid',
@@ -598,6 +604,8 @@ async function main() {
     data: {
       id: 'session-004',
       candidateName: 'David Kim',
+      candidateEmail: 'david.kim@email.com',
+      candidatePhone: '+1-555-0104',
       role: 'Software Engineer',
       company: 'TechCorp',
       experienceLevel: 'junior',
@@ -707,6 +715,8 @@ async function main() {
     data: {
       id: 'session-005',
       candidateName: 'Jennifer Lee',
+      candidateEmail: 'jennifer.lee@email.com',
+      candidatePhone: '+1-555-0105',
       role: 'Software Engineer',
       company: 'TechCorp',
       experienceLevel: 'mid',
@@ -805,6 +815,8 @@ async function main() {
     data: {
       id: 'session-006',
       candidateName: 'Robert Taylor',
+      candidateEmail: 'robert.taylor@email.com',
+      candidatePhone: '+1-555-0106',
       role: 'Software Engineer',
       company: 'TechCorp',
       experienceLevel: 'senior',
@@ -913,6 +925,8 @@ async function main() {
     data: {
       id: 'session-007',
       candidateName: 'Amanda Foster',
+      candidateEmail: 'amanda.foster@email.com',
+      candidatePhone: '+1-555-0107',
       role: 'Product Manager',
       company: 'TechCorp',
       experienceLevel: 'senior',
@@ -1004,6 +1018,8 @@ async function main() {
     data: {
       id: 'session-008',
       candidateName: 'Chris Martinez',
+      candidateEmail: 'chris.martinez@email.com',
+      candidatePhone: '+1-555-0108',
       role: 'Frontend Engineer',
       company: 'TechCorp',
       experienceLevel: 'mid',

@@ -12,6 +12,9 @@ datasource db {
 model InterviewSession {
   id                String   @id @default(uuid())
   candidateName     String
+  candidateEmail    String
+  candidatePhone    String
+  resumeText        String?
   role              String
   company           String
   experienceLevel   String
@@ -59,14 +62,13 @@ model InterviewSession {
 
 model Turn {
   id        String   @id @default(uuid())
-  speaker   String   // interviewer or candidate
+  speaker   String   // 'interviewer' or 'candidate'
   text      String
   timestamp DateTime
-  
-  // Foreign key
+
   sessionId String
   session   InterviewSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
-  
+
   @@index([sessionId])
 }
 

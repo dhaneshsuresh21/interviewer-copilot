@@ -8,6 +8,8 @@ export interface Turn {
 
 export interface InterviewContext {
   candidateName: string;
+  candidateEmail: string;
+  candidatePhone: string;
   role: string;
   company: string;
   requiredSkills: string[];
@@ -55,6 +57,9 @@ export interface CompetencyRating {
 export interface InterviewSession {
   id: string;
   candidateName: string;
+  candidateEmail?: string;
+  candidatePhone?: string;
+  resumeText?: string;
   role: string;
   company: string;
   experienceLevel: string;
@@ -131,4 +136,40 @@ export interface InterviewerAnalytics {
     no_hire: number;
   };
   recentSessions: string[]; // session IDs
+}
+
+// ---------------------------------------------------------------------------
+// Structured Interview Co-Pilot Types
+// ---------------------------------------------------------------------------
+
+export type InterviewStage = 'Intro' | 'Basic' | 'Core' | 'Advanced' | 'Behavioral';
+
+export interface TopicProgress {
+  topic: string;
+  questionsAsked: number;
+  lastScore?: number;       // 1-5 from AI evaluation
+  depth: 'surface' | 'moderate' | 'deep';
+}
+
+export interface NextQuestionRequest {
+  txId: string;
+  interviewContext: InterviewContext;
+  turns: Turn[];
+  topicProgress: TopicProgress[];
+  pendingTopics: string[];
+  questionsAsked: string[];         // actual question texts for dedup
+  lastAnswerSummary?: string;       // AI eval of last answer
+  lastAnswerScore?: number;         // 1-5
+  currentStage: InterviewStage;
+  totalQuestionsAsked: number;
+  language: string;
+}
+
+export interface NextQuestionResponse {
+  question: string;
+  topic: string;
+  difficulty: 'Basic' | 'Intermediate' | 'Advanced';
+  rationale: string;
+  stage: InterviewStage;
+  followUpHint?: string;
 }

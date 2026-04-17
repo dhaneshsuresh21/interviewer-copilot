@@ -4,6 +4,18 @@
  */
 
 // ---------------------------------------------------------------------------
+// Shared thresholds (single source of truth for all components)
+// ---------------------------------------------------------------------------
+
+export const CONFIDENCE_THRESHOLD = 0.65;
+
+/** Minimum confidence for an utterance to be treated as an interviewer question.
+ *  Garbage ASR fragments (e.g. "stop? Do you want? Get?") have low confidence
+ *  and must not be accepted as questions even if they end with "?".
+ */
+export const MIN_QUESTION_CONFIDENCE = 0.60;
+
+// ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
 
@@ -52,6 +64,10 @@ const INTERVIEWER_QUESTION_PATTERNS: RegExp[] = [
   /^(can|could|would)\s+you\s+(tell|describe|explain|share|walk)\b/i,
   /^(have you|do you have|did you)\s+(ever|experience|work|handle|manage|deal)\b/i,
   /^(what's|what is)\s+(your|the)\s+(experience|approach|strategy|process)\b/i,
+  // Imperative-form interview questions ("Please give...", "Let me know...", "Share with me...")
+  /^(please)\s+(give|tell|share|describe|explain|walk|talk|introduce|discuss|elaborate)\b/i,
+  /^(let me know|let's talk about|let's discuss|share with me|talk me through)\b/i,
+  /^(introduce yourself|tell us about yourself|tell me about yourself)\b/i,
 ];
 
 /** Patterns where the candidate is seeking clarification, not opening a new topic. */
@@ -87,9 +103,8 @@ const QUESTION_ENDERS: RegExp[] = [
 
 const ANSWER_STARTERS: RegExp[] = [
   /^(yes|no|yeah|yep|nope|sure|absolutely|definitely|certainly|of course)\b/i,
-  /^(i think|i believe|i would|i have|i've|i am|i'm|in my experience|from my perspective)\b/i,
-  /^(so|well|basically|actually|honestly|frankly)\b/i,
-  /^(the|my|our|we|they|it|this|that)\b/i,
+  /^(i think|i believe|i would|i have|i've|i am|i'm|in my experience|from my perspective),?\s+\w/i,
+  /^(so|well|basically|actually|honestly|frankly),?\s+\w/i,
 ];
 
 const FILLER_PATTERNS: RegExp[] = [
@@ -135,6 +150,27 @@ function matchesAny(text: string, patterns: RegExp[]): boolean {
 
 function countWords(text: string): number {
   return text.trim().split(/\s+/).filter(Boolean).length;
+}
+
+/**
+ * Returns the first sentence of a multi-sentence string (split on . ! ?),
+ * or the full string if it is a single sentence.
+ */
+function extractFirstSentence(text: string): string {
+  const match = text.match(/^.+?[.!?](?:\s|$)/);
+  return match ? match[0].trim() : text;
+}
+
+/**
+ * Strip leading discourse markers that interviewers commonly prepend to
+ * questions ("So", "Now", "Well", "Okay", "Right", "Tell me," etc.) before
+ * testing against QUESTION_STARTERS / INTERVIEWER_QUESTION_PATTERNS.
+ * This handles Deepgram cases like "So why should a company hire you?".
+ */
+function stripDiscourseMarkers(text: string): string {
+  return text
+    .replace(/^(so|now|well|okay|ok|right|alright|good|great|next|also|and|but|tell me[,.]?|let me ask[,.]?),?\s+/i, '')
+    .trim();
 }
 
 function makeResult(
@@ -190,22 +226,46 @@ export function classifyIntent(
     });
   }
 
-  // --- Continuation (speaker mid-thought) ---
-  if (matchesAny(trimmed, CONTINUATION_PATTERNS)) {
-    return makeResult("continuation", {
-      shouldContinue: true,
-      confidence: 0.8,
-      reason: "Continuation indicator — waiting for more",
-    });
+  // --- Multi-speaker fusion guard ---
+  // Deepgram captures both speakers on one mic, so a single transcript chunk
+  // can contain "Please give a brief introduction. Sure, my name is..."
+  // Split on sentence boundaries and check if the FIRST sentence alone is a
+  // question — if so, classify on the first sentence rather than the whole blob.
+  if (!state.hasActiveQuestion) {
+    const firstSentence = extractFirstSentence(trimmed);
+    if (firstSentence && firstSentence !== trimmed) {
+      const fsStripped = stripDiscourseMarkers(firstSentence);
+      const fsCount = countWords(fsStripped);
+      const fsStartsAsQ = matchesAny(fsStripped, QUESTION_STARTERS);
+      const fsEndsAsQ = matchesAny(firstSentence, QUESTION_ENDERS);
+      const fsIsInterviewerQ = matchesAny(fsStripped, INTERVIEWER_QUESTION_PATTERNS);
+      if (fsIsInterviewerQ || (fsStartsAsQ && fsCount >= 4) || (fsEndsAsQ && fsCount >= 3)) {
+        return makeResult("interviewer_question", {
+          isInterviewerQuestion: true,
+          confidence: fsIsInterviewerQ ? 0.9 : 0.8,
+          reason: "Question detected in first sentence of multi-speaker utterance",
+        });
+      }
+    }
   }
 
-  // --- Question detection ---
+  // --- Question detection (checked before continuation so questions
+  //     ending with conjunctions like "and"/"so" are not swallowed) ---
   const startsAsQuestion = matchesAny(trimmed, QUESTION_STARTERS);
   const endsAsQuestion = matchesAny(trimmed, QUESTION_ENDERS);
   const looksLikeQuestion = startsAsQuestion || endsAsQuestion;
 
   if (looksLikeQuestion) {
     return classifyQuestion(trimmed, count, state, endsAsQuestion);
+  }
+
+  // --- Continuation (speaker mid-thought, only when not a question) ---
+  if (matchesAny(trimmed, CONTINUATION_PATTERNS)) {
+    return makeResult("continuation", {
+      shouldContinue: true,
+      confidence: 0.8,
+      reason: "Continuation indicator — waiting for more",
+    });
   }
 
   // --- Answer detection ---
@@ -223,6 +283,17 @@ export function classifyIntent(
         : endsComplete
         ? "Complete sentence detected"
         : "Possible answer — waiting for more",
+    });
+  }
+
+  // --- Alternation fallback — interviews cycle Q → A → Q → A.
+  //     If the last speaker was the candidate (or no one has spoken yet),
+  //     an ambiguous utterance is likely the interviewer's next question.
+  if (!state.hasActiveQuestion && (state.lastSpeaker === "candidate" || state.lastSpeaker === null)) {
+    return makeResult("interviewer_question", {
+      isInterviewerQuestion: true,
+      confidence: 0.6,
+      reason: "Expected question turn by alternation",
     });
   }
 
@@ -258,13 +329,34 @@ function classifyQuestion(
     });
   }
 
-  // Strong interviewer-question surface form.
-  if (matchesAny(trimmed, INTERVIEWER_QUESTION_PATTERNS)) {
+  // Strip leading discourse markers ("So", "Now", "Well", etc.) before
+  // testing patterns — Deepgram often includes these as the first word.
+  const stripped = stripDiscourseMarkers(trimmed);
+  const strippedCount = countWords(stripped);
+
+  // Strong interviewer-question surface form (test both original and stripped).
+  if (matchesAny(stripped, INTERVIEWER_QUESTION_PATTERNS) || matchesAny(trimmed, INTERVIEWER_QUESTION_PATTERNS)) {
     return makeResult("interviewer_question", {
       isInterviewerQuestion: true,
       confidence: 0.9,
       reason: "Interviewer question pattern detected",
     });
+  }
+
+  // If the answer is already substantial (>30 words), a new wh-question or
+  // ends-with-? utterance is very likely the interviewer's next question.
+  // Use stripped text for QUESTION_STARTERS so "So why..." still matches.
+  if (state.hasActiveQuestion && state.answerWordCount > 30) {
+    const isNewInterviewerQ =
+      matchesAny(stripped, QUESTION_STARTERS) ||
+      endsWithQuestionMark;
+    if (isNewInterviewerQ && strippedCount >= 4) {
+      return makeResult("interviewer_question", {
+        isInterviewerQuestion: true,
+        confidence: 0.85,
+        reason: "New interviewer question after substantial answer",
+      });
+    }
   }
 
   // Contextual: short question while answering → treat as clarification.
@@ -332,11 +424,12 @@ export interface AutoTriggerResult {
  *  2. No question on record → hold.
  *  3. Fewer than 8 words → hold.
  *  4. Ends mid-thought and silence < 3 s → hold.
- *  5. Looks complete AND ≥ 12 words → trigger.
+ *  5. Looks complete AND ≥ 12 words + 1.5 s silence → trigger.
  *  6. Very long (≥ 50 words) with ≥ 1.5 s silence → trigger.
- *  7. Substantial (≥ 15 words) with ≥ 2.5 s silence → trigger.
- *  8. Multiple pauses, ≥ 12 words, ≥ 1.5 s silence → trigger.
- *  9. Long silence (≥ 3 s) with ≥ 10 words → trigger.
+ *  7. Substantial (≥ 15 words) with ≥ 1.5 s silence → trigger.
+ *  8. Moderate (≥ 10 words) with ≥ 2 s silence → trigger.
+ *  9. Multiple pauses, ≥ 10 words, ≥ 1.5 s silence → trigger.
+ * 10. Long silence (≥ 2.5 s) with ≥ 8 words → trigger.
  */
 export function shouldAutoTrigger(
   accumulatedText: string,
@@ -360,7 +453,7 @@ export function shouldAutoTrigger(
     return { trigger: false, reason: "No question asked yet", confidence: 0 };
   }
 
-  if (avgConfidence < 0.7) {
+  if (avgConfidence < CONFIDENCE_THRESHOLD) {
     return {
       trigger: false,
       reason: "Low transcript confidence",
@@ -387,7 +480,9 @@ export function shouldAutoTrigger(
 
   const looksComplete = matchesAny(trimmed, COMPLETE_ANSWER_ENDINGS);
 
-  if (looksComplete && wordCount >= 12) {
+  // Require both a completion signal AND meaningful silence (≥1.5 s) AND
+  // enough words — a period ending a single sentence mid-answer must not fire.
+  if (looksComplete && wordCount >= 12 && silenceMs >= 1_500) {
     return {
       trigger: true,
       reason: "Complete answer detected",
@@ -403,7 +498,7 @@ export function shouldAutoTrigger(
     };
   }
 
-  if (silenceMs >= 2_500 && wordCount >= 15) {
+  if (silenceMs >= 1_500 && wordCount >= 15) {
     return {
       trigger: true,
       reason: `Extended silence (${silenceMs} ms) with ${wordCount} words`,
@@ -411,7 +506,16 @@ export function shouldAutoTrigger(
     };
   }
 
-  if (consecutiveSilentUtterances >= 2 && wordCount >= 12 && silenceMs >= 1_500) {
+  // Moderate answer with clear pause — covers typical 10-15 word interview answers
+  if (silenceMs >= 2_000 && wordCount >= 10) {
+    return {
+      trigger: true,
+      reason: `Moderate answer with silence (${wordCount} words, ${silenceMs} ms)`,
+      confidence: 0.75,
+    };
+  }
+
+  if (consecutiveSilentUtterances >= 2 && wordCount >= 10 && silenceMs >= 1_500) {
     return {
       trigger: true,
       reason: "Multiple pauses indicate completion",
@@ -419,7 +523,7 @@ export function shouldAutoTrigger(
     };
   }
 
-  if (silenceMs >= 3_000 && wordCount >= 10) {
+  if (silenceMs >= 2_500 && wordCount >= 8) {
     return {
       trigger: true,
       reason: `Long silence (${silenceMs} ms)`,

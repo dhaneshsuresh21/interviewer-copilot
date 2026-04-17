@@ -80,6 +80,8 @@ export class PrismaStorageService {
       },
       create: {
         ...sessionData,
+        candidateEmail: sessionData.candidateEmail ?? '',
+        candidatePhone: sessionData.candidatePhone ?? '',
         startTime: new Date(sessionData.startTime),
         endTime: sessionData.endTime ? new Date(sessionData.endTime) : null,
         
@@ -232,43 +234,7 @@ export class PrismaStorageService {
   }
 
   // Helper method to map Prisma model to InterviewSession type
-  private mapToInterviewSession(session: {
-    id: string;
-    candidateName: string;
-    role: string;
-    company: string;
-    experienceLevel: string;
-    interviewerName: string | null;
-    startTime: Date;
-    endTime: Date | null;
-    duration: number | null;
-    
-    interviewerOverallScore: number;
-    interviewerRecommendation: string;
-    interviewerStrengths: string;
-    interviewerConcerns: string;
-    
-    aiOverallScore: number;
-    aiRecommendation: string;
-    aiStrengths: string;
-    aiConcerns: string;
-    aiAnalysisText: string | null;
-    
-    overallScore: number;
-    recommendation: string;
-    strengths: string;
-    concerns: string;
-    notes: string | null;
-    
-    competencyRatings: Array<{
-      competency: string;
-      score: number;
-      evidence: string;
-      concerns: string;
-      weight: number;
-      source: string;
-    }>;
-  }): InterviewSession {
+  private mapToInterviewSession(session: any): InterviewSession {
     // Safe JSON parsing with error handling
     const parseJsonSafe = (jsonStr: string, fallback: any = []) => {
       try {
@@ -282,6 +248,9 @@ export class PrismaStorageService {
     return {
       id: session.id,
       candidateName: session.candidateName,
+      candidateEmail: session.candidateEmail || undefined,
+      candidatePhone: session.candidatePhone || undefined,
+      resumeText: session.resumeText || undefined,
       role: session.role,
       company: session.company,
       experienceLevel: session.experienceLevel,
@@ -296,8 +265,8 @@ export class PrismaStorageService {
       interviewerStrengths: parseJsonSafe(session.interviewerStrengths, []),
       interviewerConcerns: parseJsonSafe(session.interviewerConcerns, []),
       interviewerRatings: session.competencyRatings
-        .filter(r => r.source === 'interviewer')
-        .map((rating) => ({
+        .filter((r: any) => r.source === 'interviewer')
+        .map((rating: any) => ({
           competency: rating.competency,
           score: rating.score,
           evidence: parseJsonSafe(rating.evidence, []),
@@ -313,8 +282,8 @@ export class PrismaStorageService {
       aiConcerns: parseJsonSafe(session.aiConcerns, []),
       aiAnalysisText: session.aiAnalysisText || undefined,
       aiRatings: session.competencyRatings
-        .filter(r => r.source === 'ai')
-        .map((rating) => ({
+        .filter((r: any) => r.source === 'ai')
+        .map((rating: any) => ({
           competency: rating.competency,
           score: rating.score,
           evidence: parseJsonSafe(rating.evidence, []),
@@ -329,8 +298,8 @@ export class PrismaStorageService {
       strengths: parseJsonSafe(session.interviewerStrengths || session.strengths, []),
       concerns: parseJsonSafe(session.interviewerConcerns || session.concerns, []),
       competencyRatings: session.competencyRatings
-        .filter(r => r.source === 'interviewer')
-        .map((rating) => ({
+        .filter((r: any) => r.source === 'interviewer')
+        .map((rating: any) => ({
           competency: rating.competency,
           score: rating.score,
           evidence: parseJsonSafe(rating.evidence, []),
@@ -341,6 +310,34 @@ export class PrismaStorageService {
       notes: session.notes || undefined,
       turns: [] // Don't return turns
     };
+  }
+
+  // Candidate lookup — find sessions by email or phone within the last N months
+  async lookupCandidateSessions(params: {
+    email?: string;
+    phone?: string;
+    withinMonths?: number;
+  }): Promise<InterviewSession[]> {
+    const { email, phone, withinMonths = 6 } = params;
+    if (!email && !phone) return [];
+
+    const since = new Date();
+    since.setMonth(since.getMonth() - withinMonths);
+
+    const orClauses: any[] = [];
+    if (email) orClauses.push({ candidateEmail: { equals: email } });
+    if (phone) orClauses.push({ candidatePhone: { equals: phone } });
+
+    const sessions = await prisma.interviewSession.findMany({
+      where: {
+        OR: orClauses,
+        startTime: { gte: since }
+      },
+      include: { competencyRatings: true },
+      orderBy: { startTime: 'desc' }
+    });
+
+    return sessions.map((s: any) => this.mapToInterviewSession(s));
   }
 
   // Cleanup on shutdown

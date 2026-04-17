@@ -8,7 +8,7 @@ import { AnalysisPanel } from './AnalysisPanel';
 import { QuestionPanel } from './QuestionPanel';
 import { RatingPanel } from './RatingPanel';
 import NotesPanel from './NotesPanel';
-import { Mic, MicOff, Square, Zap, Radio, Wifi, WifiOff, User, Briefcase, X, MessageSquare, AudioLines } from 'lucide-react';
+import { Mic, MicOff, Square, Zap, Radio, Wifi, WifiOff, User, Briefcase, X, MessageSquare, AudioLines, Clock, AlertTriangle } from 'lucide-react';
 
 export function InterviewScreen() {
   const {
@@ -19,7 +19,16 @@ export function InterviewScreen() {
     isAnalyzing,
     isGeneratingQuestions,
     isGeneratingRating,
+    pendingStageAdvance,
+    currentStage,
     setInterviewEndTime, // FIX: Add end time setter
+    interviewStartTime,
+    lastActivityTime,
+    inactivityWarningTime,
+    INACTIVITY_LIMIT_MS,
+    updateLastActivity,
+    checkInactivity,
+    clearInactivityTimer,
   } = useInterviewStore();
 
   const { isConnected: socketConnected } = useSocketAnalysis();
@@ -33,11 +42,18 @@ export function InterviewScreen() {
     canStartAnalysis,
     endInterview,
     getCurrentState,
+    advanceStage,
+    dismissStageAdvance,
   } = useCopilotEngine();
 
   const [isMicActive, setIsMicActive] = useState(false);
   const [showEndConfirm, setShowEndConfirm] = useState(false);
   const [fsmState, setFsmState] = useState('IDLE');
+  const [showInactivityWarning, setShowInactivityWarning] = useState(false);
+  const [sessionTime, setSessionTime] = useState(0);
+  
+  // Inactivity check interval
+  const inactivityIntervalRef = useRef<NodeJS.Timeout | null>(null);
   
   // Refs for auto-scroll - use span inside div for proper width measurement
   const questionContainerRef = useRef<HTMLDivElement>(null);
@@ -49,6 +65,51 @@ export function InterviewScreen() {
     }, 300);
     return () => clearInterval(interval);
   }, [getCurrentState]);
+
+  // Session timer and inactivity monitoring
+  useEffect(() => {
+    if (!interviewStartTime) return;
+
+    // Update session time every second
+    const timerInterval = setInterval(() => {
+      setSessionTime(Math.floor((Date.now() - interviewStartTime) / 1000));
+    }, 1000);
+
+    // Check inactivity every 30 seconds
+    const checkInterval = setInterval(() => {
+      const shouldExpire = checkInactivity();
+      if (shouldExpire) {
+        // Auto-end interview due to inactivity
+        endInterview();
+        setShowEndConfirm(false);
+        alert('Interview session expired due to inactivity. Session has been ended and data cleared.');
+        window.location.href = '/';
+      }
+    }, 30000); // Check every 30 seconds
+
+    // Show warning 2 minutes before expiry
+    const warningInterval = setInterval(() => {
+      if (inactivityWarningTime && Date.now() >= inactivityWarningTime) {
+        setShowInactivityWarning(true);
+      }
+    }, 10000); // Check every 10 seconds
+
+    inactivityIntervalRef.current = timerInterval;
+
+    return () => {
+      clearInterval(timerInterval);
+      clearInterval(checkInterval);
+      clearInterval(warningInterval);
+    };
+  }, [interviewStartTime, checkInactivity, endInterview, inactivityWarningTime]);
+
+  // Update activity on user interactions
+  const updateActivity = useCallback(() => {
+    if (interviewStartTime) {
+      updateLastActivity();
+      setShowInactivityWarning(false);
+    }
+  }, [interviewStartTime, updateLastActivity]);
 
   // FIX: Proper auto-scroll using setTimeout to ensure DOM is updated
   const scrollToEnd = useCallback((containerRef: React.RefObject<HTMLDivElement>) => {
@@ -69,14 +130,8 @@ export function InterviewScreen() {
     scrollToEnd(answerContainerRef);
   }, [currentAnswer, interimText, scrollToEnd]);
 
-  // FIX: Sync mic state with deepgram connection - if disconnected, mic should be off
-  useEffect(() => {
-    if (!deepgramConnected && isMicActive) {
-      setIsMicActive(false);
-    }
-  }, [deepgramConnected, isMicActive]);
-
   const handleToggleMic = async () => {
+    updateActivity(); // Update activity on mic toggle
     if (isMicActive) {
       stopMicrophone();
       setIsMicActive(false);
@@ -87,14 +142,16 @@ export function InterviewScreen() {
   };
 
   const handleAnalyze = () => {
-    if (canStartAnalysis()) {
-      triggerAnalysis();
-    }
+    updateActivity(); // Update activity on analyze
+    triggerAnalysis();
   };
+
+  const canAnalyze = !isAnalyzing && !isGeneratingQuestions && !isGeneratingRating;
 
   const confirmEndInterview = () => {
     setIsMicActive(false);
     setShowEndConfirm(false);
+    clearInactivityTimer(); // Clear inactivity timer
     // FIX: Set interview end time
     setInterviewEndTime(Date.now());
     // Navigate to evaluation page
@@ -139,6 +196,23 @@ export function InterviewScreen() {
                   <span>{interviewContext?.role}</span>
                 </div>
               </div>
+            </div>
+            
+            {/* Session Timer */}
+            <div className="flex items-center gap-3 pl-4 border-l border-gray-700">
+              <div className="flex items-center gap-1.5">
+                <Clock className="w-3.5 h-3.5 text-cyan-400" />
+                <span className="text-xs font-medium text-cyan-400">
+                  {Math.floor(sessionTime / 60)}:{(sessionTime % 60).toString().padStart(2, '0')}
+                </span>
+              </div>
+              
+              {showInactivityWarning && (
+                <div className="flex items-center gap-1.5 px-2 py-1 bg-yellow-500/20 border border-yellow-500/30 rounded">
+                  <AlertTriangle className="w-3.5 h-3.5 text-yellow-400" />
+                  <span className="text-xs text-yellow-400">Session expiring soon</span>
+                </div>
+              )}
             </div>
             
             {/* Connection Status */}
@@ -191,7 +265,7 @@ export function InterviewScreen() {
             
             <button
               onClick={handleAnalyze}
-              disabled={!canStartAnalysis() || isAnalyzingAny}
+              disabled={isAnalyzingAny}
               className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-purple-600 to-purple-500 text-white rounded-lg text-sm font-medium hover:from-purple-500 hover:to-purple-400 disabled:from-gray-700 disabled:to-gray-700 disabled:text-gray-500 transition-all shadow-lg shadow-purple-500/20 disabled:shadow-none"
             >
               <Zap className={`w-4 h-4 ${isAnalyzingAny ? 'animate-pulse' : ''}`} />
@@ -199,7 +273,10 @@ export function InterviewScreen() {
             </button>
             
             <button
-              onClick={() => setShowEndConfirm(true)}
+              onClick={() => {
+                updateActivity();
+                setShowEndConfirm(true);
+              }}
               className="flex items-center gap-2 px-4 py-2 bg-gray-700 text-gray-300 rounded-lg text-sm font-medium hover:bg-gray-600 transition-colors"
             >
               <Square className="w-4 h-4" />
@@ -280,7 +357,10 @@ export function InterviewScreen() {
             </div>
             {currentAnswer && (
               <button 
-                onClick={clearAnswer} 
+                onClick={() => {
+                  updateActivity();
+                  clearAnswer();
+                }} 
                 className="shrink-0 text-gray-500 hover:text-gray-300 p-1.5 rounded-lg hover:bg-gray-700/50 transition-colors"
                 title="Clear answer"
               >
@@ -291,8 +371,45 @@ export function InterviewScreen() {
         </div>
       </div>
 
+      {/* Stage Advance Banner */}
+      {pendingStageAdvance && (
+        <div className="mx-4 mt-2 flex items-center justify-between px-4 py-2.5 bg-gradient-to-r from-purple-900/40 to-blue-900/40 border border-purple-500/30 rounded-lg">
+          <div className="flex items-center gap-2">
+            <Zap className="w-4 h-4 text-purple-400" />
+            <span className="text-sm text-purple-200">
+              Ready to advance to <span className="font-semibold text-white">{
+                (() => {
+                  const stages = ['Intro', 'Basic', 'Core', 'Advanced', 'Behavioral'];
+                  const idx = stages.indexOf(currentStage);
+                  return idx < stages.length - 1 ? stages[idx + 1] : currentStage;
+                })()
+              }</span> stage
+            </span>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={dismissStageAdvance}
+              className="px-3 py-1 text-xs text-gray-400 hover:text-gray-200 transition-colors"
+            >
+              Dismiss
+            </button>
+            <button
+              onClick={advanceStage}
+              className="px-3 py-1.5 bg-purple-600 text-white text-xs font-medium rounded-lg hover:bg-purple-500 transition-colors"
+            >
+              Advance Stage
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* AI Analysis Panels */}
-      <div className="flex-1 grid grid-cols-3 gap-4 p-4 min-h-0">
+      <div 
+        className="flex-1 grid grid-cols-3 gap-4 p-4 min-h-0"
+        onMouseMove={updateActivity}
+        onKeyDown={updateActivity}
+        onClick={updateActivity}
+      >
         <div className="min-h-0">
           <AnalysisPanel />
         </div>

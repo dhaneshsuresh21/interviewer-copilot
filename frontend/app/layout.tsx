@@ -1,5 +1,6 @@
 import type { Metadata } from 'next'
 import './globals.css'
+import LoggerInit from '../components/LoggerInit'
 
 export const metadata: Metadata = {
   title: 'Interviewer Assistant',
@@ -13,7 +14,10 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en">
-      <body>{children}</body>
+      <body>
+        <LoggerInit />
+        {children}
+      </body>
     </html>
   )
 }

@@ -1,5 +1,6 @@
 import { useRef, useCallback, useEffect } from 'react';
 import type { DeepgramResult, Utterance } from '../types';
+import { CONFIDENCE_THRESHOLD } from '../intentClassifier';
 
 interface UseUtteranceBuilderProps {
   onUtteranceComplete: (utterance: Utterance) => void;
@@ -9,8 +10,8 @@ interface UseUtteranceBuilderProps {
 // Increased silence threshold to reduce false triggers from natural pauses
 const SILENCE_CHECK_MS = 2500;
 
-// Minimum confidence to consider a transcript reliable
-const MIN_CONFIDENCE_THRESHOLD = 0.65;
+// Minimum confidence to consider a transcript reliable (uses shared threshold)
+const MIN_CONFIDENCE_THRESHOLD = CONFIDENCE_THRESHOLD;
 
 // Minimum words before we consider finalizing
 const MIN_WORDS_TO_FINALIZE = 3;
@@ -105,6 +106,7 @@ export function useUtteranceBuilder({ onUtteranceComplete, speaker }: UseUtteran
     // Start new utterance if needed
     if (!startTimeRef.current) {
       startTimeRef.current = now;
+      console.log(`[UttBuilder:${speakerRef.current}] New utterance started`);
     }
 
     lastUpdateRef.current = now;
@@ -130,6 +132,7 @@ export function useUtteranceBuilder({ onUtteranceComplete, speaker }: UseUtteran
           accumulatorRef.current = newText;
         }
         wordCountRef.current = accumulatorRef.current.split(/\s+/).filter(Boolean).length;
+        console.log(`[UttBuilder:${speakerRef.current}] Accumulated: ${wordCountRef.current} words | speechFinal=${result.speechFinal} | text="${accumulatorRef.current.substring(0, 80)}"`);
       }
 
       // Track speechFinal events - multiple in a row suggests speaker is done
@@ -139,10 +142,13 @@ export function useUtteranceBuilder({ onUtteranceComplete, speaker }: UseUtteran
         // Only finalize on speechFinal if we have enough content
         // and confidence is good
         const avgConfidence = getAverageConfidence();
+        console.log(`[UttBuilder:${speakerRef.current}] speechFinal #${speechFinalCountRef.current} | words=${wordCountRef.current} conf=${avgConfidence.toFixed(2)} | needWords>=${MIN_WORDS_TO_FINALIZE} needConf>=${MIN_CONFIDENCE_THRESHOLD}`);
         if (wordCountRef.current >= MIN_WORDS_TO_FINALIZE && avgConfidence >= MIN_CONFIDENCE_THRESHOLD) {
+          console.log(`[UttBuilder:${speakerRef.current}] -> Finalizing on speechFinal`);
           clearSilenceTimer();
           finalizeUtterance();
         } else {
+          console.log(`[UttBuilder:${speakerRef.current}] -> Not enough content/conf, starting silence timer`);
           // Not enough content yet, start silence timer
           startSilenceTimer();
         }
