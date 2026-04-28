@@ -15,7 +15,7 @@ import type { InterviewSession } from '@/lib/types';
 const BACKEND_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
 
 export function SetupScreen() {
-  const { setInterviewContext, setInterviewActive, setInterviewState } = useInterviewStore();
+  const { setInterviewContext, setInterviewActive, setInterviewState, resetInterview } = useInterviewStore();
   const router = useRouter();
 
   const [candidateName, setCandidateName] = useState('');
@@ -45,6 +45,15 @@ export function SetupScreen() {
   const interviewerName = getInterviewerName();
 
   const handleLogout = () => {
+    // Clear all browser storage on logout
+    try {
+      localStorage.clear();
+      sessionStorage.clear();
+      console.log('[SetupScreen] Browser storage cleared on logout');
+    } catch (error) {
+      console.error('[SetupScreen] Failed to clear browser storage:', error);
+    }
+    
     clearSession();
     router.push('/login');
   };
@@ -206,6 +215,28 @@ export function SetupScreen() {
   const handleStartInterview = () => {
     if (!validate()) return;
 
+    // Clear browser storage data EXCEPT authentication session
+    try {
+      // Save the interviewer session before clearing
+      const interviewerSession = localStorage.getItem('interviewer-session');
+      
+      // Clear all storage
+      localStorage.clear();
+      sessionStorage.clear();
+      
+      // Restore the interviewer session
+      if (interviewerSession) {
+        localStorage.setItem('interviewer-session', interviewerSession);
+      }
+      
+      console.log('[SetupScreen] Browser storage cleared (except auth session) before starting interview');
+    } catch (error) {
+      console.error('[SetupScreen] Failed to clear browser storage:', error);
+    }
+
+    // Reset interview store to ensure clean state
+    resetInterview();
+
     const requiredSkills = skills.split(',').map(s => s.trim()).filter(Boolean);
 
     setInterviewContext({
@@ -230,7 +261,8 @@ export function SetupScreen() {
     setExperienceLevel(template.experienceLevel);
     setSkills(template.requiredSkills.join(', '));
     setJobDescription(template.jobDescription || '');
-    setPresetQuestions(template.presetQuestions || []);
+    // FIX: Ensure preset questions are properly set from template
+    setPresetQuestions(Array.isArray(template.presetQuestions) ? template.presetQuestions : []);
   };
 
   const inputClasses = (hasError: boolean) => `
@@ -497,24 +529,36 @@ export function SetupScreen() {
               />
             </div>
 
-            {/* Preset Questions */}
-            {presetQuestions.length > 0 && (
-              <div className="bg-blue-500/10 border border-blue-500/30 rounded-lg p-4">
-                <h3 className="text-sm font-semibold text-blue-400 mb-2 flex items-center gap-2">
+            {/* Preset Questions - FIX: Always show section with ability to add/edit */}
+            <div className={`rounded-lg p-4 ${presetQuestions.length > 0 ? 'bg-blue-500/10 border border-blue-500/30' : 'bg-gray-700/30 border border-gray-600'}`}>
+              <div className="flex items-center justify-between mb-2">
+                <h3 className="text-sm font-semibold text-blue-400 flex items-center gap-2">
                   <Sparkles size={16} />
-                  Preset Questions ({presetQuestions.length})
+                  Preset Questions {presetQuestions.length > 0 && `(${presetQuestions.length})`}
                 </h3>
-                <ul className="space-y-2">
-                  {presetQuestions.map((question, index) => (
-                    <li key={index} className="text-sm text-gray-300 flex items-start gap-2">
-                      <span className="text-blue-400 mt-0.5">•</span>
-                      <span>{question}</span>
-                    </li>
-                  ))}
-                </ul>
-                <p className="mt-3 text-xs text-gray-500">These questions will be available during the interview</p>
               </div>
-            )}
+              {presetQuestions.length > 0 ? (
+                <>
+                  <ul className="space-y-2 mb-3">
+                    {presetQuestions.map((question, index) => (
+                      <li key={index} className="text-sm text-gray-300 flex items-start gap-2">
+                        <span className="text-blue-400 mt-0.5">•</span>
+                        <span className="flex-1">{question}</span>
+                        <button
+                          onClick={() => setPresetQuestions(presetQuestions.filter((_, i) => i !== index))}
+                          className="text-red-400 hover:text-red-300 text-xs"
+                        >
+                          <X className="w-3 h-3" />
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                  <p className="text-xs text-gray-500">These questions will be available during the interview</p>
+                </>
+              ) : (
+                <p className="text-xs text-gray-500 mb-2">No preset questions. Use a template or add custom questions.</p>
+              )}
+            </div>
             {/* Resume Upload */}
             <div>
               <label className="flex items-center gap-2 text-sm font-medium text-gray-300 mb-2">

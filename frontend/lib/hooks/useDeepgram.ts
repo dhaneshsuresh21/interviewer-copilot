@@ -139,7 +139,7 @@ export function useDeepgram({ onTranscript, onUtteranceEnd, onError }: UseDeepgr
   const startMicrophone = useCallback(async () => {
     try {
       console.log('[Deepgram] Starting microphone...');
-      setMicrophoneError(null); // FIX: Clear previous errors
+      setMicrophoneError(null); // Clear previous errors
 
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: {
@@ -173,8 +173,10 @@ export function useDeepgram({ onTranscript, onUtteranceEnd, onError }: UseDeepgr
     } catch (error) {
       console.error('[Deepgram] Microphone error:', error);
       const err = error as Error;
-      setMicrophoneError(err); // FIX: Set error state for UI feedback
+      setMicrophoneError(err);
       onErrorRef.current?.(err);
+      // FIX: Re-throw error so caller can handle it
+      throw err;
     }
   }, []);
 

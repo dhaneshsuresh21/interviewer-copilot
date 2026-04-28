@@ -1,14 +1,16 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { BarChart3, Eye, Calendar, User, Award, Filter, GitCompare } from 'lucide-react';
+import { BarChart3, Eye, Calendar, User, Award, Filter, GitCompare, Mail } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import BulkComparisonModal from './BulkComparisonModal';
+import SendEmailButton from './SendEmailButton';
 
 interface Candidate {
   id: string;
   candidateName: string;
   candidateId: string;
+  candidateEmail?: string;
   role: string;
   company: string;
   startTime: number;
@@ -382,14 +384,22 @@ export default function ComparisonDashboard() {
                     <td className="px-6 py-4 text-sm text-gray-300 max-w-xs truncate">
                       {candidate.strengths[0] || '-'}
                     </td>
-                    <td className="px-6 py-4 text-center">
-                      <button
-                        onClick={() => router.push(`/session/${candidate.id}`)}
-                        className="inline-flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium transition-colors"
-                      >
-                        <Eye size={16} />
-                        View
-                      </button>
+                    <td className="px-6 py-4">
+                      <div className="flex items-center gap-2 justify-center">
+                        <button
+                          onClick={() => router.push(`/session/${candidate.id}`)}
+                          className="inline-flex items-center gap-2 px-3 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium transition-colors text-sm"
+                        >
+                          <Eye size={16} />
+                          View
+                        </button>
+                        <SendEmailButton
+                          sessionId={candidate.id}
+                          candidateName={candidate.candidateName}
+                          candidateEmail={candidate.candidateEmail}
+                          compact={true}
+                        />
+                      </div>
                     </td>
                   </tr>
                 ))}

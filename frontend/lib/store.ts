@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import type { Turn, Utterance, InterviewContext, InterviewState, RatingData, InterviewStage, TopicProgress } from './types';
+import type { Turn, Utterance, InterviewContext, InterviewState, RatingData, TopicProgress } from './types';
 
 // Batching mechanism for chunk updates to reduce re-renders
 let analysisBatchTimer: NodeJS.Timeout | null = null;
@@ -38,10 +38,8 @@ interface InterviewStore {
   // Next Question Co-Pilot
   nextQuestionText: string;
   isGeneratingNextQuestion: boolean;
-  currentStage: InterviewStage;
   topicProgress: TopicProgress[];
   questionsAsked: string[];
-  pendingStageAdvance: boolean;
   lastAnswerScore: number | undefined;
 
   // Ratings
@@ -80,10 +78,8 @@ interface InterviewStore {
   setIsGeneratingQuestions: (generating: boolean) => void;
   setIsGeneratingRating: (generating: boolean) => void;
   setIsGeneratingNextQuestion: (generating: boolean) => void;
-  setCurrentStage: (stage: InterviewStage) => void;
   updateTopicProgress: (topic: string, score?: number) => void;
   addQuestionAsked: (question: string) => void;
-  setPendingStageAdvance: (pending: boolean) => void;
   setLastAnswerScore: (score: number | undefined) => void;
   addRating: (rating: RatingData) => void;
   addCoveredTopic: (topic: string) => void;
@@ -118,10 +114,8 @@ export const useInterviewStore = create<InterviewStore>()(
       isGeneratingRating: false,
       nextQuestionText: '',
       isGeneratingNextQuestion: false,
-      currentStage: 'Intro' as InterviewStage,
       topicProgress: [],
       questionsAsked: [],
-      pendingStageAdvance: false,
       lastAnswerScore: undefined,
       ratings: [],
       coveredTopics: [],
@@ -204,7 +198,6 @@ export const useInterviewStore = create<InterviewStore>()(
       setIsGeneratingQuestions: (generating) => set({ isGeneratingQuestions: generating }),
       setIsGeneratingRating: (generating) => set({ isGeneratingRating: generating }),
       setIsGeneratingNextQuestion: (generating) => set({ isGeneratingNextQuestion: generating }),
-      setCurrentStage: (stage) => set({ currentStage: stage }),
       updateTopicProgress: (topic, score) => set((state) => {
         const existing = state.topicProgress.find(tp => tp.topic === topic);
         if (existing) {
@@ -230,7 +223,6 @@ export const useInterviewStore = create<InterviewStore>()(
       addQuestionAsked: (question) => set((state) => ({
         questionsAsked: [...state.questionsAsked, question],
       })),
-      setPendingStageAdvance: (pending) => set({ pendingStageAdvance: pending }),
       setLastAnswerScore: (score) => set({ lastAnswerScore: score }),
       addRating: (rating) => set((state) => ({ ratings: [...state.ratings, rating] })),
       addCoveredTopic: (topic) => set((state) => ({ 
@@ -284,10 +276,8 @@ export const useInterviewStore = create<InterviewStore>()(
         isGeneratingRating: false,
         nextQuestionText: '',
         isGeneratingNextQuestion: false,
-        currentStage: 'Intro' as InterviewStage,
         topicProgress: [],
         questionsAsked: [],
-        pendingStageAdvance: false,
         lastAnswerScore: undefined,
         ratings: [],
         coveredTopics: [],

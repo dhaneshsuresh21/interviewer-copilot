@@ -1,7 +1,7 @@
 import { useEffect, useRef, useCallback, useState } from 'react';
 import { io, Socket } from 'socket.io-client';
 import { useInterviewStore } from '../store';
-import type { Turn, InterviewContext, TopicProgress, InterviewStage } from '../types';
+import type { Turn, InterviewContext, TopicProgress } from '../types';
 import { API_BASE_URL } from '../constants';
 
 export function useSocketAnalysis() {
@@ -255,7 +255,6 @@ export function useSocketAnalysis() {
     questionsAsked: string[],
     lastAnswerSummary: string | undefined,
     lastAnswerScore: number | undefined,
-    currentStage: InterviewStage,
     totalQuestionsAsked: number,
     language: string
   ) => {
@@ -267,7 +266,7 @@ export function useSocketAnalysis() {
 
     const txId = currentTxRef.current || `tx-${Date.now()}`;
     console.log(`[Socket] === EMITTING suggest:next-question === txId=${txId}`);
-    console.log(`[Socket]   stage=${currentStage} totalQ=${totalQuestionsAsked} pending=[${pendingTopics.join(',')}] lastScore=${lastAnswerScore}`);
+    console.log(`[Socket]   totalQ=${totalQuestionsAsked} pending=[${pendingTopics.join(',')}] lastScore=${lastAnswerScore}`);
     clearNextQuestion();
     setIsGeneratingNextQuestion(true);
 
@@ -281,7 +280,6 @@ export function useSocketAnalysis() {
         questionsAsked,
         lastAnswerSummary,
         lastAnswerScore,
-        currentStage,
         totalQuestionsAsked,
         language,
       });

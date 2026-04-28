@@ -9,7 +9,7 @@ import { ChatGoogleGenerativeAI } from "@langchain/google-genai";
 import { BaseChatModel } from "@langchain/core/language_models/chat_models";
 import { HumanMessage, SystemMessage } from "@langchain/core/messages";
 import { config } from "../config";
-import type { Turn, InterviewContext, TopicProgress, InterviewStage } from "../types";
+import type { Turn, InterviewContext, TopicProgress } from "../types";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -472,7 +472,7 @@ Format:
 
   /**
    * Streams a single structured next-question recommendation based on
-   * interview progress, topic coverage, stage, and adaptive difficulty.
+   * interview progress, topic coverage, and adaptive difficulty.
    * Output is a JSON object matching NextQuestionResponse.
    */
   async *streamStructuredNextQuestion(
@@ -483,14 +483,13 @@ Format:
     questionsAsked: string[],
     lastAnswerSummary: string | undefined,
     lastAnswerScore: number | undefined,
-    currentStage: InterviewStage,
     totalQuestionsAsked: number,
     language: string,
     generationId: string,
     modelName = "gpt-4o-mini"
   ): AsyncGenerator<string> {
     console.log(`[LangChain] streamStructuredNextQuestion START | genId=${generationId} model=${modelName}`);
-    console.log(`[LangChain]   stage=${currentStage} totalQ=${totalQuestionsAsked} pending=[${pendingTopics?.join(',')}] lastScore=${lastAnswerScore}`);
+    console.log(`[LangChain]   totalQ=${totalQuestionsAsked} pending=[${pendingTopics?.join(',')}] lastScore=${lastAnswerScore}`);
     this.registerGeneration(generationId);
     const model = this.getModel(modelName);
 
@@ -501,7 +500,6 @@ Format:
       questionsAsked,
       lastAnswerSummary,
       lastAnswerScore,
-      currentStage,
       totalQuestionsAsked,
       language
     );
@@ -593,7 +591,6 @@ function buildNextQuestionSystemPrompt(
   questionsAsked: string[],
   lastAnswerSummary: string | undefined,
   lastAnswerScore: number | undefined,
-  currentStage: InterviewStage,
   totalQuestionsAsked: number,
   language: string
 ): string {
@@ -629,7 +626,7 @@ function buildNextQuestionSystemPrompt(
       : lastAnswerScore >= 4
         ? "The candidate answered strongly. INCREASE difficulty or go DEEPER on the topic."
         : "The candidate gave an average answer. Maintain current difficulty level."
-    : "This is the start of the interview. Begin with an appropriate question for the current stage.";
+    : "This is the start of the interview. Begin with an appropriate question.";
 
   return `You are a structured AI Interview Co-Pilot assisting a human interviewer.
 Your job is to generate the SINGLE best next interview question.
@@ -639,7 +636,6 @@ ${jdSection}
 ${resumeSection}
 Required Skills: ${ctx.requiredSkills.join(", ")}
 Experience Level: ${ctx.experienceLevel}
-Current Stage: ${currentStage}
 Total Questions Asked: ${totalQuestionsAsked}
 Language: ${language}
 
@@ -663,11 +659,10 @@ ${difficultyGuidance}
 2. Topic Coverage: Ensure all important topics are covered. Do NOT focus on only one topic. Ask max 2-3 questions per topic, then switch.
 3. Controlled Topic Switching: Switch topics only when enough depth (2-3 questions) OR topic is exhausted. Transitions must be logical (e.g., Java → Spring → Microservices, NOT Java → HR → Finance).
 4. No Repetition: Do NOT repeat any question from the PREVIOUS QUESTIONS list. Do NOT ask similar variations unless deep probing is needed.
-5. Stage-Based Flow: Follow this progression: Intro → Basic → Core → Advanced → Behavioral. Current stage is ${currentStage}.
-6. Adaptive Difficulty: ${difficultyGuidance}
-7. Depth vs Breadth: Ensure both follow-up depth AND multi-topic breadth.
-8. Real-World Focus: Prefer practical, scenario-based questions. Avoid purely theoretical questions.
-9. Bias-Free: Do not assume candidate ability. Focus only on provided inputs.
+5. Adaptive Difficulty: ${difficultyGuidance}
+6. Depth vs Breadth: Ensure both follow-up depth AND multi-topic breadth.
+7. Real-World Focus: Prefer practical, scenario-based questions. Avoid purely theoretical questions.
+8. Bias-Free: Do not assume candidate ability. Focus only on provided inputs.
 
 ## DECISION LOGIC
 Before generating, decide:
@@ -682,7 +677,6 @@ Respond with ONLY a valid JSON object (no markdown fencing, no explanation):
   "topic": "The topic/skill this question targets",
   "difficulty": "Basic" | "Intermediate" | "Advanced",
   "rationale": "Brief reason for choosing this question (1 sentence)",
-  "stage": "${currentStage}",
   "followUpHint": "If candidate struggles, ask this simpler version instead"
 }
 

@@ -142,8 +142,6 @@ export interface InterviewerAnalytics {
 // Structured Interview Co-Pilot Types
 // ---------------------------------------------------------------------------
 
-export type InterviewStage = 'Intro' | 'Basic' | 'Core' | 'Advanced' | 'Behavioral';
-
 export interface TopicProgress {
   topic: string;
   questionsAsked: number;
@@ -160,7 +158,6 @@ export interface NextQuestionRequest {
   questionsAsked: string[];         // actual question texts for dedup
   lastAnswerSummary?: string;       // AI eval of last answer
   lastAnswerScore?: number;         // 1-5
-  currentStage: InterviewStage;
   totalQuestionsAsked: number;
   language: string;
 }
@@ -170,6 +167,5 @@ export interface NextQuestionResponse {
   topic: string;
   difficulty: 'Basic' | 'Intermediate' | 'Advanced';
   rationale: string;
-  stage: InterviewStage;
   followUpHint?: string;
 }

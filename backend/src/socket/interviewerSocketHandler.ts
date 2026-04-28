@@ -226,10 +226,10 @@ export function initializeSocketIO(io: Server) {
       const {
         txId, interviewContext, turns, topicProgress, pendingTopics,
         questionsAsked, lastAnswerSummary, lastAnswerScore,
-        currentStage, totalQuestionsAsked, language
+        totalQuestionsAsked, language
       } = data;
       console.log(`[Socket:${socket.id}] suggest:next-question received | txId=${txId}`);
-      console.log(`[Socket:${socket.id}]   stage=${currentStage} totalQ=${totalQuestionsAsked} pending=[${pendingTopics?.join(',')}] lastScore=${lastAnswerScore}`);
+      console.log(`[Socket:${socket.id}]   totalQ=${totalQuestionsAsked} pending=[${pendingTopics?.join(',')}] lastScore=${lastAnswerScore}`);
       console.log(`[Socket:${socket.id}]   topicProgress: ${JSON.stringify(topicProgress?.map(tp => `${tp.topic}:${tp.questionsAsked}`))}`);
       console.log(`[Socket:${socket.id}]   questionsAsked: ${questionsAsked?.length || 0} items`);
       const socketGens = activeGenerations.get(socket.id)!;
@@ -256,7 +256,6 @@ export function initializeSocketIO(io: Server) {
           questionsAsked,
           lastAnswerSummary,
           lastAnswerScore,
-          currentStage,
           totalQuestionsAsked,
           language,
           generationId

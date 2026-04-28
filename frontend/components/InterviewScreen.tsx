@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect, useRef, useCallback } from 'react';
+import { useRouter } from 'next/navigation';
 import { useInterviewStore } from '@/lib/store';
 import { useCopilotEngine } from '@/lib/hooks/useCopilotEngine';
 import { useSocketAnalysis } from '@/lib/hooks/useSocketAnalysis';
@@ -11,6 +12,7 @@ import NotesPanel from './NotesPanel';
 import { Mic, MicOff, Square, Zap, Radio, Wifi, WifiOff, User, Briefcase, X, MessageSquare, AudioLines, Clock, AlertTriangle } from 'lucide-react';
 
 export function InterviewScreen() {
+  const router = useRouter();
   const {
     interviewContext,
     currentQuestion,
@@ -19,8 +21,6 @@ export function InterviewScreen() {
     isAnalyzing,
     isGeneratingQuestions,
     isGeneratingRating,
-    pendingStageAdvance,
-    currentStage,
     setInterviewEndTime, // FIX: Add end time setter
     interviewStartTime,
     lastActivityTime,
@@ -29,12 +29,14 @@ export function InterviewScreen() {
     updateLastActivity,
     checkInactivity,
     clearInactivityTimer,
+    language,
   } = useInterviewStore();
 
   const { isConnected: socketConnected } = useSocketAnalysis();
 
   const {
     isConnected: deepgramConnected,
+    connect: connectDeepgram,
     startMicrophone,
     stopMicrophone,
     triggerAnalysis,
@@ -42,8 +44,6 @@ export function InterviewScreen() {
     canStartAnalysis,
     endInterview,
     getCurrentState,
-    advanceStage,
-    dismissStageAdvance,
   } = useCopilotEngine();
 
   const [isMicActive, setIsMicActive] = useState(false);
@@ -132,12 +132,30 @@ export function InterviewScreen() {
 
   const handleToggleMic = async () => {
     updateActivity(); // Update activity on mic toggle
+    
     if (isMicActive) {
+      // Stop recording
       stopMicrophone();
       setIsMicActive(false);
     } else {
-      await startMicrophone();
-      setIsMicActive(true);
+      // Start recording
+      try {
+        // Ensure Deepgram is connected first
+        if (!deepgramConnected) {
+          console.log('[InterviewScreen] Deepgram not connected, connecting now...');
+          await connectDeepgram(language);
+          // Wait a bit for connection to establish
+          await new Promise(resolve => setTimeout(resolve, 500));
+        }
+        
+        // Start microphone
+        await startMicrophone();
+        setIsMicActive(true);
+      } catch (error) {
+        console.error('[InterviewScreen] Failed to start microphone:', error);
+        setIsMicActive(false);
+        alert('Failed to start microphone. Please check your microphone permissions and try again.');
+      }
     }
   };
 
@@ -152,10 +170,10 @@ export function InterviewScreen() {
     setIsMicActive(false);
     setShowEndConfirm(false);
     clearInactivityTimer(); // Clear inactivity timer
-    // FIX: Set interview end time
+    // Set interview end time
     setInterviewEndTime(Date.now());
-    // Navigate to evaluation page
-    window.location.href = '/evaluate';
+    // Navigate to evaluation page using Next.js router (avoids full page reload)
+    router.push('/evaluate');
   };
 
   const isAnalyzingAny = isAnalyzing || isGeneratingQuestions || isGeneratingRating;
@@ -370,38 +388,6 @@ export function InterviewScreen() {
           </div>
         </div>
       </div>
-
-      {/* Stage Advance Banner */}
-      {pendingStageAdvance && (
-        <div className="mx-4 mt-2 flex items-center justify-between px-4 py-2.5 bg-gradient-to-r from-purple-900/40 to-blue-900/40 border border-purple-500/30 rounded-lg">
-          <div className="flex items-center gap-2">
-            <Zap className="w-4 h-4 text-purple-400" />
-            <span className="text-sm text-purple-200">
-              Ready to advance to <span className="font-semibold text-white">{
-                (() => {
-                  const stages = ['Intro', 'Basic', 'Core', 'Advanced', 'Behavioral'];
-                  const idx = stages.indexOf(currentStage);
-                  return idx < stages.length - 1 ? stages[idx + 1] : currentStage;
-                })()
-              }</span> stage
-            </span>
-          </div>
-          <div className="flex items-center gap-2">
-            <button
-              onClick={dismissStageAdvance}
-              className="px-3 py-1 text-xs text-gray-400 hover:text-gray-200 transition-colors"
-            >
-              Dismiss
-            </button>
-            <button
-              onClick={advanceStage}
-              className="px-3 py-1.5 bg-purple-600 text-white text-xs font-medium rounded-lg hover:bg-purple-500 transition-colors"
-            >
-              Advance Stage
-            </button>
-          </div>
-        </div>
-      )}
 
       {/* AI Analysis Panels */}
       <div 

@@ -5,8 +5,7 @@ import { useSocketAnalysis } from './useSocketAnalysis';
 import { useUtteranceBuilder } from './useUtteranceBuilder';
 import { ConversationStateMachine } from '../ConversationStateMachine';
 import { classifyIntent, shouldAutoTrigger, ConversationState, CONFIDENCE_THRESHOLD, MIN_QUESTION_CONFIDENCE } from '../intentClassifier';
-import type { DeepgramResult, Utterance, InterviewStage } from '../types';
-import { STAGE_QUOTAS, STAGE_ORDER } from '../types';
+import type { DeepgramResult, Utterance } from '../types';
 import { logTranscriptEvent } from '../transcriptLogger';
 
 export function useCopilotEngine() {
@@ -29,13 +28,10 @@ export function useCopilotEngine() {
     isGeneratingRating,
     updateLastActivity, // Add inactivity timer
     analysisText,
-    currentStage,
     topicProgress,
     questionsAsked,
     updateTopicProgress,
     addQuestionAsked,
-    setCurrentStage,
-    setPendingStageAdvance,
     setLastAnswerScore,
     clearNextQuestion,
     setIsGeneratingNextQuestion,
@@ -182,7 +178,6 @@ export function useCopilotEngine() {
       questionsAsked,
       answer.substring(0, 300),
       undefined,
-      currentStage,
       totalQ,
       language
     );
@@ -201,7 +196,7 @@ export function useCopilotEngine() {
     confidenceSamplesRef.current = [];
 
     return true;
-  }, [interviewContext, turns, language, coveredTopics, analyze, isAnalyzing, isGeneratingQuestions, isGeneratingRating, socketConnected, addTurn, setCurrentQuestion, setCurrentAnswer, getAvgConfidence, requestNextQuestion, topicProgress, questionsAsked, currentStage, addQuestionAsked]);
+  }, [interviewContext, turns, language, coveredTopics, analyze, isAnalyzing, isGeneratingQuestions, isGeneratingRating, socketConnected, addTurn, setCurrentQuestion, setCurrentAnswer, getAvgConfidence, requestNextQuestion, topicProgress, questionsAsked, addQuestionAsked]);
 
   useEffect(() => {
     triggerRef.current = triggerAnalysisInternal;
@@ -438,7 +433,7 @@ export function useCopilotEngine() {
     }
   }, [isAnalyzing, isGeneratingQuestions, isGeneratingRating]);
 
-  // ── Post-analysis: parse score, update topic progress, check stage advancement ──
+  // ── Post-analysis: parse score, update topic progress ──
   const prevAnalyzingRef = useRef(false);
   useEffect(() => {
     const wasAnalyzing = prevAnalyzingRef.current;
@@ -446,7 +441,7 @@ export function useCopilotEngine() {
 
     // Fire only on the transition isAnalyzing: true → false
     if (wasAnalyzing && !isAnalyzing && analysisText && interviewContext) {
-      console.log('[Engine] Analysis completed — updating topic progress & stage');
+      console.log('[Engine] Analysis completed — updating topic progress');
 
       // 1. Parse score from analysisText (look for **Score: X/5**)
       const scoreMatch = analysisText.match(/\*\*Score:\s*(\d(?:\.\d)?)\s*\/\s*5\*\*/);
@@ -461,17 +456,6 @@ export function useCopilotEngine() {
       if (lastQuestion) {
         const topic = interviewContext.requiredSkills?.[0] || 'General';
         updateTopicProgress(topic, score);
-      }
-
-      // 3. Check stage advancement
-      const totalQ = questionsAsked.length;
-      const quota = STAGE_QUOTAS[currentStage] || 999;
-      if (totalQ >= quota) {
-        const idx = STAGE_ORDER.indexOf(currentStage);
-        if (idx < STAGE_ORDER.length - 1) {
-          console.log(`[Engine] Stage quota reached (${totalQ}/${quota}), suggesting advance to ${STAGE_ORDER[idx + 1]}`);
-          setPendingStageAdvance(true);
-        }
       }
     }
   }, [isAnalyzing]);
@@ -531,7 +515,6 @@ export function useCopilotEngine() {
       questionsAsked,
       answer.substring(0, 300),
       undefined,
-      currentStage,
       totalQ,
       language
     );
@@ -545,7 +528,7 @@ export function useCopilotEngine() {
     utteranceEndCountRef.current = 0;
 
     return true;
-  }, [interviewContext, turns, language, coveredTopics, analyze, isAnalyzing, isGeneratingQuestions, isGeneratingRating, socketConnected, addTurn, setCurrentAnswer, clearNextQuestion, setIsGeneratingNextQuestion, requestNextQuestion, topicProgress, questionsAsked, currentStage, addQuestionAsked]);
+  }, [interviewContext, turns, language, coveredTopics, analyze, isAnalyzing, isGeneratingQuestions, isGeneratingRating, socketConnected, addTurn, setCurrentAnswer, clearNextQuestion, setIsGeneratingNextQuestion, requestNextQuestion, topicProgress, questionsAsked, addQuestionAsked]);
 
   const clearAnswer = useCallback(() => {
     answerRef.current = '';
@@ -586,23 +569,9 @@ export function useCopilotEngine() {
 
   const getCurrentState = useCallback(() => fsmState, [fsmState]);
 
-  // Stage advance / dismiss
-  const advanceStage = useCallback(() => {
-    const idx = STAGE_ORDER.indexOf(currentStage);
-    if (idx < STAGE_ORDER.length - 1) {
-      const next = STAGE_ORDER[idx + 1];
-      console.log(`[Engine] Advancing stage: ${currentStage} → ${next}`);
-      setCurrentStage(next);
-      setPendingStageAdvance(false);
-    }
-  }, [currentStage, setCurrentStage, setPendingStageAdvance]);
-
-  const dismissStageAdvance = useCallback(() => {
-    setPendingStageAdvance(false);
-  }, [setPendingStageAdvance]);
-
   return {
     isConnected: deepgram.isConnected,
+    connect: deepgram.connect,
     startMicrophone: deepgram.startMicrophone,
     stopMicrophone: deepgram.stopMicrophone,
     triggerAnalysis,
@@ -610,7 +579,5 @@ export function useCopilotEngine() {
     canStartAnalysis,
     endInterview,
     getCurrentState,
-    advanceStage,
-    dismissStageAdvance,
   };
 }
